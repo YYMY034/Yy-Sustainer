@@ -1,0 +1,34 @@
+# ---- 依赖与构建产物 ----
+node_modules/
+dist/
+release/
+release-build/
+release-final/
+
+# ---- 运行时 / 个人数据 ----
+logs/
+.workbuddy/
+yyagentd.config.json
+
+# ---- 开发过程产物 ----
+AGENT-WHITEPAPER.md
+screen*.png
+t*-preview.html
+*.log
+.playwright-cli/
+.t.js
+.tmp-*
+.verify-out.txt
+tui-out.txt
+tui-err.txt
+scripts/.t64-dbg.cjs
+
+# ---- 个人文件（绝不入库）----
+staff-info.xlsx
+reminder-buy-ticket.ps1
+*.xlsx
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini

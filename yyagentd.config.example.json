@@ -1,0 +1,11 @@
+{
+  "tasks": [
+    {
+      "name": "demo-hello",
+      "cron": "*/2 * * * *",
+      "prompt": "无人值守测试任务：用一句话报出当前时间和工作目录，然后结束。",
+      "cwd": "D:\\path\\to\\your\\workspace",
+      "enabled": false
+    }
+  ]
+}

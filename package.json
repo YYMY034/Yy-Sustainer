@@ -1,0 +1,62 @@
+{
+  "name": "yysustainer",
+  "version": "0.3.0",
+  "private": true,
+  "author": "YYMY",
+  "type": "module",
+  "description": "独立的本地 TUI AI agent：任务自动化 + 编码 + 长期记忆 + 定时任务 + MCP，零 opencode 依赖",
+  "main": "electron/main.cjs",
+  "files": [
+    "dist",
+    "web",
+    "electron",
+    "scripts",
+    "bin",
+    "README.md",
+    "yyagentd.config.json"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "yyagent": "./bin/yyagent.js"
+  },
+  "scripts": {
+    "tui": "tsx src/cli.ts",
+    "client": "electron .",
+    "gateway": "tsx src/gateway.ts",
+    "agent": "tsx src/cli.ts",
+    "start": "tsx src/main.ts start",
+    "list": "tsx src/main.ts list",
+    "run": "tsx src/main.ts run",
+    "typecheck": "tsc --noEmit",
+    "bundle": "node scripts/bundle.mjs",
+    "dist": "node scripts/bundle.mjs && electron-builder --win nsis",
+    "dist:dir": "node scripts/bundle.mjs && electron-builder --win dir"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@types/ws": "^8.18.1",
+    "ai": "^5.0.0",
+    "docx": "^9.7.1",
+    "exceljs": "^4.4.0",
+    "fast-glob": "^3.3.0",
+    "gpt-tokenizer": "^4.0.0",
+    "ink": "6.8.0",
+    "node-cron": "^4.0.0",
+    "react": "^19.2.8",
+    "string-width": "^8.2.2",
+    "tsx": "^4.19.0",
+    "undici": "^8.10.2",
+    "ws": "^8.21.3",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.18",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.9.0"
+  }
+}

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+:root{--panel2:#1e1f24;--panel:#17181c;--border:#2c2e35;--text:#e6e6e6;--dim:#8a8f98;--accent:#4da3ff;--shadow:rgba(0,0,0,.5)}
+body{background:#0f1013;color:var(--text);font:14px/1.5 "Segoe UI",system-ui;padding:24px}
+#modelMenu{position:static;display:flex;flex-direction:column;min-width:300px;max-width:380px;background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:6px;box-shadow:0 8px 28px var(--shadow)}
+#modelMenu .msearch{margin:2px 4px 6px;position:relative}
+#modelMenu .msearch input{width:100%;box-sizing:border-box;background:var(--panel);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:7px 10px 7px 28px;font:inherit;font-size:13px}
+#modelMenu .msearch .sico{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--dim)}
+#modelMenu .mlist{max-height:320px;overflow-y:auto}
+#modelMenu .mg{display:flex;align-items:center;gap:6px;padding:9px 10px 4px 12px;font-size:11px;font-weight:600;letter-spacing:.3px;color:var(--dim);user-select:none}
+#modelMenu .mg:first-child{padding-top:2px}
+#modelMenu .mg .dot{width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:.75;flex-shrink:0}
+#modelMenu .mg .mname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#modelMenu .mg .mc{font-size:10px;opacity:.6;flex-shrink:0}
+#modelMenu .mi{padding:7px 12px 7px 26px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--text);display:flex;align-items:center;justify-content:space-between;gap:10px;position:relative}
+#modelMenu .mi::before{content:"";position:absolute;left:16px;top:50%;width:4px;height:1px;background:var(--border)}
+#modelMenu .mi:hover{background:var(--panel)}
+#modelMenu .mi.active{color:var(--accent)}
+#modelMenu .mempty{padding:14px 12px;font-size:12px;color:var(--dim);text-align:center}
+#modelMenu .madd{margin-top:6px;border-top:1px solid var(--border);padding:8px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--dim);display:flex;align-items:center;gap:7px}
+</style></head><body>
+<div id="modelMenu"></div>
+<div id="out" style="margin-top:18px;font-size:12px;color:var(--dim)"></div>
+<script>
+const $=id=>document.getElementById(id)
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+let models=[
+ {spec:'sensenova/glm-5.2',provider:'sensenova',modelId:'glm-5.2'},
+ {spec:'sensenova/deepseek-v3.2',provider:'sensenova',modelId:'deepseek-v3.2'},
+ {spec:'sensenova/nova2.5-pro',provider:'sensenova',modelId:'nova2.5-pro'},
+ {spec:'zhipu/glm-4.7',provider:'zhipu',modelId:'glm-4.7'},
+ {spec:'openrouter/claude-sonnet-4.5',provider:'openrouter',modelId:'claude-sonnet-4.5'},
+ {spec:'openrouter/gpt-5',provider:'openrouter',modelId:'gpt-5'},
+ {spec:'openrouter/kimi-k2',provider:'openrouter',modelId:'kimi-k2'}
+]
+let currentModel='sensenova/glm-5.2'
+function modelShort(spec){if(!spec)return '助手';return String(spec).split('/').pop()||spec}
+function pickerValue(){return currentModel}
+function filteredModels(){const q=($('modelSearchInput')?.value??'').trim().toLowerCase();return q?models.filter(m=>m.spec.toLowerCase().includes(q)):models}
+function renderModelMenu(){
+  const list=filteredModels()
+  const cur=pickerValue()
+  const groups=[]
+  const gIdx=new Map()
+  for(const m of list){
+    const p=m.provider||modelShort(m.spec)||'未分组'
+    if(!gIdx.has(p)){gIdx.set(p,groups.length);groups.push({provider:p,items:[]})}
+    groups[gIdx.get(p)].items.push(m)
+  }
+  const items=groups.length
+    ? groups.map(g=>
+      `<div class="mg"><span class="dot"></span><span class="mname" title="${esc(g.provider)}">${esc(g.provider)}</span><span class="mc">${g.items.length}</span></div>`+
+      g.items.map(m=>
+        `<div class="mi ${m.spec===cur?'active':''}" data-spec="${esc(m.spec)}" title="${esc(m.spec)}"><span>${esc(m.modelId||modelShort(m.spec))}</span>${m.spec===cur?'<span>✓</span>':''}</div>`
+      ).join('')
+    ).join('')
+    : `<div class="mempty">没有匹配「${esc($('modelSearchInput')?.value??'')}」的模型</div>`
+  $('modelMenu').innerHTML=
+    `<div class="msearch"><span class="sico">Q</span><input id="modelSearchInput" placeholder="搜索模型…" value="${esc($('modelSearchInput')?.value??'')}"></div>`+
+    `<div class="mlist">${items}</div>`+
+    `<div class="madd" id="mAddEntry">＋ 添加模型…</div>`
+  $('modelMenu').querySelectorAll('.mi').forEach(el=>el.onclick=()=>{$('out').textContent='pickModel → '+el.dataset.spec})
+  const si=$('modelSearchInput')
+  si.oninput=()=>{const pos=si.selectionStart;renderModelMenu();const ni=$('modelSearchInput');ni.focus();try{ni.setSelectionRange(pos,pos)}catch{}}
+}
+renderModelMenu()
+$('out').textContent='组数='+document.querySelectorAll('.mg').length+' 模型行数='+document.querySelectorAll('.mi').length
+</script></body></html>

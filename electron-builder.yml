@@ -1,0 +1,64 @@
+# Yy Sustainer 发行版打包配置（electron-builder）
+#
+# 核心思路：发行包里**不带 node_modules**。
+# 引擎已被 esbuild 内联成 dist/gateway.mjs（含 ai/ws/exceljs/docx 等全部依赖），
+# 再装一份 node_modules 只会白白多出上百 MB，而且里面全是用户机器上用不到的东西。
+#
+# dist/ web/ scripts/ yyagentd.config.json 走 extraResources（以**真实文件**落到 resources/），
+# 不能放进 asar —— 原因见 electron/main.cjs 顶部注释（ELECTRON_RUN_AS_NODE 读不到 asar 内文件，
+# 且网关要按请求现读 web/index.html）。
+
+appId: com.yymy.yysustainer
+productName: Yy Sustainer
+copyright: Copyright © 2026 YYMY
+
+directories:
+  output: release
+
+# 只打「Electron 壳 + 清单」进 asar；引擎与静态资源由 extraResources 分发
+files:
+  - package.json
+  - electron/**
+  - "!node_modules/**"
+
+extraResources:
+  - from: dist
+    to: dist
+  - from: web
+    to: web
+  # scripts/ 里运行时只用得到这两个（toast.ps1 发系统通知、tabbit-cli-mcp.mjs 是 Tabbit MCP 适配层）。
+  # 其余几十个 check-*/gen-*/probe-* 是开发脚手架和预览页，发给用户只会显得脏（首版曾整目录打进包里）。
+  - from: scripts/toast.ps1
+    to: scripts/toast.ps1
+  - from: scripts/tabbit-cli-mcp.mjs
+    to: scripts/tabbit-cli-mcp.mjs
+  - from: yyagentd.config.json
+    to: yyagentd.config.json
+
+# 引擎已是纯 JS 单文件，没有任何原生模块要重编译
+npmRebuild: false
+asar: true
+compression: maximum
+
+win:
+  # 应用图标 / 任务栏 / 快捷方式都取它。web/yyagent.ico 是 9 档多尺寸（16→256，32bpp），
+  # 满足 electron-builder 对 256x256 的硬要求；缺了它会退回默认 Electron 图标（很显眼）。
+  icon: web/yyagent.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-Setup.${ext}
+
+nsis:
+  oneClick: false # 有安装向导，用户能选目录
+  perMachine: false # 装到 %LOCALAPPDATA%\Programs（免管理员、目录可写）
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Yy Sustainer
+  installerIcon: web/yyagent.ico
+  uninstallerIcon: web/yyagent.ico
+  installerHeaderIcon: web/yyagent.ico
+  deleteAppDataOnUninstall: false # 卸载不删 ~/.yyagent（会话/配置/统计都在这儿）
+  uninstallDisplayName: Yy Sustainer ${version}
