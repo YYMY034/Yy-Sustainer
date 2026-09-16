@@ -2,7 +2,19 @@
 
 独立的本地 TUI AI agent：任务自动化 + 编码 + 长期记忆 + 定时任务。
 
-## 快速开始
+## 下载安装（Windows）
+
+不想折腾开发环境？直接下安装包，**无需安装 Node.js**：
+
+**[⬇ 下载最新版安装包](https://github.com/YYMY034/Yy-Sustainer/releases/latest)** · Windows 10/11 x64 · 约 109 MB
+
+1. 双击 `Yy-Sustainer-0.3.0-Setup.exe`
+2. 首次运行若弹出 Windows SmartScreen 提示（本版本未做代码签名），点「更多信息」→「仍要运行」
+3. 从桌面快捷方式启动
+
+首次启动可选择内置本地模型（自动下载、免 API Key），也可填入自己的 OpenAI 兼容 Key。
+
+## 从源码运行
 
 ```powershell
 # 1. 安装依赖
