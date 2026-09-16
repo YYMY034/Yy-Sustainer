@@ -2,6 +2,7 @@
   "name": "yysustainer",
   "version": "0.3.0",
   "private": true,
+  "license": "GPL-3.0-only",
   "author": "YYMY",
   "type": "module",
   "description": "独立的本地 TUI AI agent：任务自动化 + 编码 + 长期记忆 + 定时任务 + MCP，零 opencode 依赖",
