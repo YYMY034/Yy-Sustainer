@@ -1,6 +1,6 @@
 # Yy Sustainer
 
-独立的本地 TUI AI agent：任务自动化 + 编码 + 长期记忆 + 定时任务，零 opencode 依赖。
+独立的本地 TUI AI agent：任务自动化 + 编码 + 长期记忆 + 定时任务。
 
 ## 快速开始
 
