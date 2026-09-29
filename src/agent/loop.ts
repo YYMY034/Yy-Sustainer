@@ -282,7 +282,7 @@ async function runConverge(
   opts: AgentOptions,
   handlers: StreamHandlers,
   t0: number,
-): Promise<{ text: string; steps: number }> {
+): Promise<{ text: string; steps: number; reasoningText?: string }> {
   const messages: CoreMessage[] = [
     ...priorHistory,
     ...responseMessages,
@@ -290,6 +290,9 @@ async function runConverge(
     { role: "user", content: convergePrompt(Math.max(1, Math.round(prep.convergeTimeoutMs / 60_000))) },
   ]
   let steps = 0
+  // T102：收敛段的思考流与主轮同款处理（标签开合是有状态的）
+  let inReason = false
+  let reasoningText = ""
   const result = toolCtx.run(
     { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal, statusSink: (s: string) => handlers.onStatus?.(s), onSubStep: (info) => handlers.onSubStep?.(info) },
     () =>
@@ -347,7 +350,26 @@ async function runConverge(
           name: c.toolName ?? "",
           output: toolErrorText(c.error),
         })
+      } else if (chunk.type === "reasoning-delta") {
+        // T102：收敛续跑段的思考流同样要可见——只有主轮有这套处理的话，reasoning 模型
+        // 在收敛段会「静默」一整段，落库的 reasoningText 也缺这一截
+        const d = String((chunk as { text?: string }).text ?? "")
+        if (d) {
+          if (!inReason) {
+            inReason = true
+            handlers.onText?.("\n<thinking>\n")
+          }
+          reasoningText += d
+          handlers.onText?.(d)
+        }
+      } else if (inReason) {
+        inReason = false
+        handlers.onText?.("\n</thinking>\n")
       }
+    }
+    if (inReason) {
+      inReason = false
+      handlers.onText?.("\n</thinking>\n")
     }
   } catch (e) {
     if (opts.signal?.aborted) return { text: "", steps }
@@ -361,7 +383,7 @@ async function runConverge(
     throw e
   }
   void t0
-  return { text, steps }
+  return { text, steps, ...(reasoningText ? { reasoningText } : {}) }
 }
 
 async function prepare(
@@ -562,6 +584,8 @@ export async function runAgentStream(
   // 标签开合是有状态的：进 reasoning 发 <thinking>，离开（下一个非 reasoning chunk）补 </thinking>。
   let inReason = false
   let reasoningText = ""
+  /** T102：收敛续跑段的思考（与主轮的分开累积，落库时合并） */
+  let convReasoning = ""
   // 回合内压过就用回合内的那份（更新）；没压过才用回合开始前那份。
   // **必须是函数**：const 会在声明时就地求值，那时 midTurnStored 还是 undefined，
   // 结果永远是「回合开始前那份」——回合内压的那次又被丢掉了。
@@ -715,6 +739,7 @@ export async function runAgentStream(
         handlers.onStatus?.("引导收敛：验证与收尾")
         const conv = await runConverge(prep, opts.history ?? [], responseMessages, opts, handlers, t0)
         steps += conv.steps
+        if (conv.reasoningText) convReasoning = conv.reasoningText
         if (conv.text.trim()) {
           handlers.onText?.(conv.text)
         }
@@ -743,7 +768,7 @@ export async function runAgentStream(
     model: opts.model,
     usage: { in: u?.inputTokens ?? 0, out: u?.outputTokens ?? 0, cached: u?.cachedInputTokens ?? 0 },
     compactedStored: finalStored(),
-    // T101：原生思考全文（无则为 undefined）。网关落库时前置成 <thinking> 块
-    ...(reasoningText ? { reasoningText } : {}),
+    // T101/T102：原生思考全文（主轮 + 收敛段合并）。网关落库时前置成 <thinking> 块
+    ...(reasoningText || convReasoning ? { reasoningText: [reasoningText, convReasoning].filter(Boolean).join("\n") } : {}),
   }
 }

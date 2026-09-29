@@ -307,10 +307,14 @@ export const bgReadTool = tool({
           const w: { done: boolean } = { done: false }
           const arr = bgWaiters.get(task_id) ?? []
           let timer: ReturnType<typeof setTimeout> | undefined
+          const onAbort = (): void => finish()
           const finish = (): void => {
             if (w.done) return
             w.done = true
             if (timer) clearTimeout(timer)
+            // T102：唤醒路径（退出/超时）要摘掉 abort 监听——signal 是回合级的，
+            // 一次 wait 挂一个不摘，长会话里就是一次一个的监听器泄漏
+            signal?.removeEventListener("abort", onAbort)
             const cur = bgWaiters.get(task_id)
             if (cur) {
               const i = cur.indexOf(finish)
@@ -322,7 +326,7 @@ export const bgReadTool = tool({
           timer = setTimeout(finish, timeoutMs)
           arr.push(finish)
           bgWaiters.set(task_id, arr)
-          signal?.addEventListener("abort", finish, { once: true })
+          signal?.addEventListener("abort", onAbort, { once: true })
         })
       } finally {
         clearInterval(iv)

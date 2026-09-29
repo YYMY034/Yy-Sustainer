@@ -121,6 +121,23 @@ test("toCoreMessages 过滤 system 与空内容", () => {
   assert.deepEqual(out.map((m) => m.content), ["真的问题", "回答"])
 })
 
+test("toCoreMessages 剥 assistant 的思考块（T102：历史思考只烧 token 不带信息）", () => {
+  const out = toCoreMessages([
+    // 闭合思考块 → 剥掉，正文保留
+    { role: "assistant", content: "<thinking>先想想</thinking>\n\n结论是 A", ts: 1 },
+    // 未闭合（停止兜底落库的半截）→ 整段剥掉
+    { role: "assistant", content: "<thinking>被打断的思考", ts: 2 },
+    // 纯思考回合 → 剥完为空，整条丢弃（空 assistant 消息上游 API 拒收）
+    { role: "assistant", content: "<thinking>只有思考</thinking>", ts: 3 },
+    // 用户消息里的 <thinking> 是贴的代码/示例 → 原样保留（剥了就是篡改用户输入）
+    { role: "user", content: "这个标签啥意思：<thinking>hi</thinking>", ts: 4 },
+    // 没有思考块的正常消息不动
+    { role: "assistant", content: "普通回答", ts: 5 },
+  ])
+  assert.deepEqual(out.map((m) => m.content), ["结论是 A", "这个标签啥意思：<thinking>hi</thinking>", "普通回答"])
+  assert.deepEqual(out.map((m) => m.ts), [1, 4, 5])
+})
+
 test("truncateFrom 按 ts 截断，找不到返回 undefined", () => {
   const msgs = [
     { role: "user" as const, content: "a", ts: 1 },

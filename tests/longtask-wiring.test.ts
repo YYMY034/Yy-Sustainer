@@ -246,7 +246,8 @@ test("流式两处的 toolCtx 上下文带上 statusSink（T97 子代理进度�
 })
 
 test("toCoreMessages 带上 ts（压缩写回要靠它定位顺序）", () => {
-  assert.match(store, /content: m\.content, ts: m\.ts/, "toCoreMessages 丢了 ts，压缩后消息顺序只能现编")
+  // T102 起 content 走变量（思考块剥离按角色分支），字面从 `content: m.content` 变 `content, ts: m.ts`——ts 保留的意图不变
+  assert.match(store, /content, ts: m\.ts/, "toCoreMessages 丢了 ts，压缩后消息顺序只能现编")
   assert.match(store, /export type CoreMessageWithTs = CoreMessage & \{ ts: number \}/)
 })
 

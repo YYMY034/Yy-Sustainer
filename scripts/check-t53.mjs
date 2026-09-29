@@ -23,9 +23,9 @@ const rule = (sel) => {
 console.log('=== ① store.ts：system 角色与 LLM 上下文过滤 ===')
 ok('StoredMessage.role 扩展 "system"', /role:\s*"user" \| "assistant" \| "system"/.test(store))
 ok('toCoreMessages 过滤 system（绝不进 LLM 上下文）',
-  /\.filter\(\(m\) => m\.role !== "system" && m\.content\.trim\(\)\)/.test(store), store.slice(store.indexOf('toCoreMessages'), store.indexOf('toCoreMessages') + 200))
-ok('反向：不做 system → system 轮的映射（过滤在前，map 只剩 user/assistant）',
-  store.indexOf('m.role !== "system"') < store.indexOf('.map((m) => ({ role: m.role'))
+  /if \(m\.role === "system" \|\| !m\.content\.trim\(\)\) continue/.test(store), store.slice(store.indexOf('toCoreMessages'), store.indexOf('toCoreMessages') + 200)) // T102 改 for 循环（思考块剥离需要按角色分支），意图不变
+ok('反向：不做 system → system 轮的映射（system 一进来就 continue，只剩 user/assistant）',
+  store.indexOf('m.role === "system"') !== -1 && store.indexOf('.map((m) => ({ role: m.role') === -1 && store.indexOf('out.push({ role: m.role') > store.indexOf('m.role === "system"'))
 
 console.log('=== ② gateway.ts：/api/model 落提示消息并广播 ===')
 ok('会话分支先取旧生效模型', gateway.includes('const oldModel = effectiveModelOf(sid)'))

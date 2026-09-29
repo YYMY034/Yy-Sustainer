@@ -3724,7 +3724,7 @@ function connect() {
     else if (m.type === "bg-exit") {
       // T95：后台任务完成事件——一次性提示（顶栏语义），不再等 3s 轮询
       if (!m.sessionId || m.sessionId === activeId) $("status").textContent = `后台任务 ${m.id} 已结束（code=${m.exitCode ?? "?"}）`
-      refreshBgPanel() // T99：面板数据即时刷新（开着自动化页时）
+      if ($("autoPage")?.classList.contains("show")) refreshBgPanel() // T102：面板不可见时不白拉接口
     }
     else if (m.type === "assist") {
       // 按会话隔离：只处理当前会话的辅助消息（m.sessionId 为空 = 旧协议/质检兜底，也显示）

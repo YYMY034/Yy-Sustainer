@@ -304,11 +304,28 @@ export function repairIndex(): RepairResult {
  */
 export type CoreMessageWithTs = CoreMessage & { ts: number }
 
+/**
+ * T102：LLM 上下文不回传历史思考块。`<thinking>`（T101 落库的原生思考）是**当轮草稿**——
+ * 结论已经在正文里，进历史后每轮都为它白付 token（reasoning 模型的思考回合给上下文永久加租），
+ * 压缩摘要也会跟着把它当结论存。只剥 **assistant** 消息：用户消息里出现 `<thinking>`
+ * 更可能是贴的代码/示例，剥了就是篡改用户输入。落库原文不动（UI 折叠渲染、TUI 剥离各自处理）。
+ * 未闭合的半截（停止/超时兜底落库的）一并剥。
+ */
+export function stripThinkingForModel(content: string): string {
+  return content.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").replace(/<thinking>[\s\S]*$/g, "")
+}
+
 export function toCoreMessages(messages: StoredMessage[]): CoreMessageWithTs[] {
-  return messages
+  const out: CoreMessageWithTs[] = []
+  for (const m of messages) {
     // T55：system（模型切换提示等）只入库展示，绝不进 LLM 上下文
-    .filter((m) => m.role !== "system" && m.content.trim())
-    .map((m) => ({ role: m.role, content: m.content, ts: m.ts }) as CoreMessageWithTs)
+    if (m.role === "system" || !m.content.trim()) continue
+    const content = m.role === "assistant" ? stripThinkingForModel(m.content).trim() : m.content
+    // 剥完变空的（纯思考回合，如「已停止」兜底只落了思考）——空 assistant 消息上游 API 会拒收
+    if (m.role === "assistant" && !content) continue
+    out.push({ role: m.role, content, ts: m.ts } as CoreMessageWithTs)
+  }
+  return out
 }
 
 /** P2-2 撤回/编辑：截掉 ts 及之后的所有消息，返回剩余消息数组（找不到返回 undefined） */
