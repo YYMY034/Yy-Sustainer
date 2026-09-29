@@ -622,6 +622,10 @@
      T87：圆形 spinner 去掉，状态文字本身 shimmer 扫光 */
   .stream-status { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; }
   .stream-status .shimmer-text { font-weight: 600; }
+  /* T100：子代理分道——并行 delegate 各占一行，跟在状态行下面 */
+  #subLanes { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+  .sub-lane { display: flex; gap: 8px; align-items: baseline; font-size: 11.5px; color: var(--dim); padding: 1px 6px; }
+  .sub-lane .sl-p { color: var(--text); font-weight: 600; }
   .act-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); padding: 3px 6px; border-radius: 6px; cursor: pointer; user-select: none; }
   .act-line:hover { background: var(--panel); color: var(--text); }
   .act-line .spinner { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
@@ -1290,6 +1294,8 @@
       </div>
       <h3 style="font-size:13px; color:var(--dim); margin:4px 0 10px;">已有任务</h3>
       <div id="autoList"></div>
+      <h3 style="font-size:13px; color:var(--dim); margin:18px 0 10px;">后台任务（bash background=true 启动的命令）</h3>
+      <div id="bgList"><div class="dim" style="font-size:12px;">（无）</div></div>
     </div></div>
   </div>
 
@@ -2600,7 +2606,7 @@ function render() {
       return `${divider}<div class="msg assistant${arch}" id="msg${i}"><div class="who">${who}</div>${assistBody}${steps}${msgActs}</div>${turnSep}`
     }).join("")
     box.innerHTML = olderBtn + body +
-    (streamingOn ? `<div class="msg assistant" id="streaming"><div class="who">${esc(modelShort(activeSessionModel()))}</div>${streamStatusText ? `<div class="stream-status" id="streamStatus"><span id="streamStatusText" class="shimmer-text">${esc(streamStatusText)}</span></div>` : ""}<div id="activity"></div><div class="body" id="streamBody"></div></div>` : "")
+    (streamingOn ? `<div class="msg assistant" id="streaming"><div class="who">${esc(modelShort(activeSessionModel()))}</div>${streamStatusText ? `<div class="stream-status" id="streamStatus"><span id="streamStatusText" class="shimmer-text">${esc(streamStatusText)}</span></div>` : ""}<div id="subLanes"></div><div id="activity"></div><div class="body" id="streamBody"></div></div>` : "")
     hardenSvgBoxes(box) // 10.34 第二道闸：.svgbox 内容写入后同步清场（解析差异兜底）
     // jumpBottom 是静态节点（HTML 里定义），innerHTML 重写不会碰它
     // T45：导图横向偏移回填（先同步来一次，再补一帧兜住布局尚未算完的情况）
@@ -3336,6 +3342,7 @@ function openSession(id, jumpIdx) {
   closeCtxPop()
   editContext = null // P2-2 换会话取消未发送的编辑
   streamStatusText = "" // T57：换会话清空流式状态行
+  subLanes.clear()
   $("status").textContent = ""
   // F1 会话级模型：换会话立即按该会话刷新模型显示（refreshState 会带 sid 重取 sessionModel）
   refreshState().catch(() => {})
@@ -3450,6 +3457,7 @@ async function refreshState() {
   const cur = sessions.find((s) => s.id === activeId)
   if (cur?.ctxPct != null) renderCtx(cur.ctxPct)
   renderTodoBar(st.todo ?? [], busy())
+  if ($("autoPage")?.classList.contains("show")) refreshBgPanel() // T99：自动化页可见时顺带刷新后台任务面板
   monitorStatus = streamingOn ? streamStatusText : ($("status").textContent ?? "") // T57：流式中监工取输出区状态
   renderMonitor()
   // P0-5：流式进行中不全量重绘（会冲掉正在追加的 streamBody），只同步按钮
@@ -3606,9 +3614,11 @@ function connect() {
         monitorStatus = m.text ?? ""; renderMonitor()
         // T57/T59：过程状态（思考中/正在X…/执行中/压缩中）一律进流式输出区，顶栏不再出现任何过程状态。
         // 步骤边界 streamingOn 可能刚被上一条消息事件收掉 → ensureStream 重建占位，状态行不漏回顶栏
+        if (m.text !== streamStatusText) statusSince = Date.now() // T98：状态变了才重置计时（必须在赋值前比）
         streamStatusText = m.text ?? ""
+        if (m.turnIn != null) { turnTok.in = m.turnIn; turnTok.out = m.turnOut ?? 0 }
         if (streamStatusText) ensureStream()
-        const sst = $("streamStatusText"); if (sst) sst.textContent = streamStatusText
+        paintStreamStatus()
       }
     }
     else if (m.type === "tool") {
@@ -3629,7 +3639,8 @@ function connect() {
       busySid = busySet.values().next().value ?? null
       if (!sid || sid === activeId) {
         updateSendBtn()
-        if (!m.busy && (!sid || sid === activeId)) { streamingOn = false; streamBuf = ""; window.__steps = []; window.__actOpen = -1 }
+        if (m.busy) { statusSince = Date.now(); turnTok = { in: 0, out: 0 } } // T98：新回合重置计时与 token 累计
+        if (!m.busy && (!sid || sid === activeId)) { streamingOn = false; streamBuf = ""; window.__steps = []; window.__actOpen = -1; subLanes.clear() }
         renderMonitor()
         render()
         // T93 P2：回合一结束就重查一次——这一轮要是被中断（进程被杀/超时强停），横幅该出来了
@@ -3702,9 +3713,18 @@ function connect() {
       if (!m.sessionId) { $("banner").style.display = "block"; $("banner").textContent = `出错：${m.message}` }
     }
     else if (m.type === "notice") { if (!m.sessionId || m.sessionId === activeId) { $("status").textContent = m.text; if (m.text === "已停止") $("banner").style.display = "none" } }
+    else if (m.type === "sub-step") {
+      // T100：子代理分道事件——按 persona 各自一行，实时更新
+      if (!m.sessionId || m.sessionId === activeId) {
+        subLanes.set(m.persona, { step: m.step, maxSteps: m.maxSteps, tools: m.tools ?? [] })
+        if (streamStatusText) ensureStream()
+        renderSubLanes()
+      }
+    }
     else if (m.type === "bg-exit") {
       // T95：后台任务完成事件——一次性提示（顶栏语义），不再等 3s 轮询
       if (!m.sessionId || m.sessionId === activeId) $("status").textContent = `后台任务 ${m.id} 已结束（code=${m.exitCode ?? "?"}）`
+      refreshBgPanel() // T99：面板数据即时刷新（开着自动化页时）
     }
     else if (m.type === "assist") {
       // 按会话隔离：只处理当前会话的辅助消息（m.sessionId 为空 = 旧协议/质检兜底，也显示）
@@ -3719,6 +3739,32 @@ function connect() {
 }
 let streamBuf = ""
 let streamStatusText = "" // T57：执行中/思考中状态（流式占位内的状态行；顶栏不再显示过程状态）
+// T100：子代理分道——persona → {step,maxSteps,tools}，并行子代理各占一行不互相覆盖
+const subLanes = new Map()
+function renderSubLanes() {
+  const box = $("subLanes")
+  if (!box) return
+  if (!subLanes.size) { box.innerHTML = ""; return }
+  box.innerHTML = [...subLanes.entries()].map(([p, l]) =>
+    `<div class="sub-lane"><span class="sl-p">${esc(p)}</span><span class="sl-s">第 ${l.step}/${l.maxSteps} 步${l.tools && l.tools.length ? " · " + esc(l.tools.join(",")) : ""}</span></div>`,
+  ).join("")
+}
+// T98：状态行节奏透明——当前状态从何时开始（≥3s 显示「· Ns」，用户能分辨「在干活」和「卡住了」）
+// + 本回合累计 token（status 事件带 turnIn/turnOut，来自网关 onStep 的真实累计）
+let statusSince = 0
+let turnTok = { in: 0, out: 0 }
+function paintStreamStatus() {
+  const sst = $("streamStatusText")
+  if (!sst) return
+  let t = streamStatusText
+  if (!t) { sst.textContent = ""; return }
+  const el = statusSince ? Math.floor((Date.now() - statusSince) / 1000) : 0
+  if (el >= 3) t += ` · ${el}s`
+  const tot = turnTok.in + turnTok.out
+  if (tot > 0) t += ` · 本回合 ${(tot / 1000).toFixed(1)}k tok`
+  sst.textContent = t
+}
+setInterval(() => { if (streamingOn && busy()) paintStreamStatus() }, 1000)
 function ensureStream() {
   if (!streamingOn) {
     streamingOn = true
@@ -4275,6 +4321,53 @@ $("afSubmit").onclick = async () => {
     resetAutoForm(); loadTasks()
   } catch (e) { $("afErr").textContent = `请求失败：${e.message}` }
 }
+// ---------- T99：后台任务面板（/api/bg + /api/bg/log） ----------
+let bgCache = []
+async function refreshBgPanel() {
+  try {
+    const r = await (await fetch("/api/bg")).json()
+    bgCache = r.tasks ?? []
+    renderBgPanel()
+  } catch { /* 网关没起就不刷 */ }
+}
+function renderBgPanel() {
+  const box = $("bgList")
+  if (!box) return
+  if (!bgCache.length) { box.innerHTML = `<div class="tk-empty">（无后台任务）</div>`; return }
+  box.innerHTML = bgCache.map((b) => {
+    const dur = Math.round((Date.now() - b.startedAt) / 1000)
+    const cls = b.done === false ? "running" : b.done === true && b.exitCode !== 0 ? "fail" : "ok"
+    const state = b.done === true
+      ? (b.exitCode === 0 ? "已结束 code=0" : `已结束 code=${b.exitCode ?? "?"}`)
+      : b.done === false ? `运行中 ${dur}s` : "状态未知（网关重启过，进程可能仍在跑）"
+    return `<div class="tk ${cls}">
+      <span class="tdot"></span>
+      <div class="tmain">
+        <div class="tn"><span>${esc(b.id)}</span><span class="tcron">${esc(state)}</span></div>
+        <div class="tprompt" title="${esc(b.command)}">${esc(b.command.slice(0, 110))}</div>
+        <div class="tlast" title="${esc(b.logFile)}">${esc(b.logFile)}</div>
+      </div>
+      <div class="tops"><button class="tbtn" data-bglog="${esc(b.id)}">看日志</button></div>
+    </div>`
+  }).join("")
+}
+document.addEventListener("click", (e) => {
+  const btn = e.target && e.target.closest ? e.target.closest("[data-bglog]") : null
+  if (!btn) return
+  const id = btn.getAttribute("data-bglog") || ""
+  const row = btn.closest(".tk")
+  if (!row) return
+  const exist = row.querySelector(".bg-tail")
+  if (exist) { exist.remove(); return }
+  fetch(`/api/bg/log?id=${encodeURIComponent(id)}`).then((r) => r.json()).then((j) => {
+    const pre = document.createElement("pre")
+    pre.className = "bg-tail"
+    pre.style.cssText = "max-height:220px;overflow:auto;background:var(--card2,var(--card,#f6f6f6));padding:8px 10px;border-radius:8px;font-size:11.5px;white-space:pre-wrap;margin:6px 0 0;"
+    pre.textContent = j.text ?? j.error ?? "(无输出)"
+    const tm = row.querySelector(".tmain")
+    ;(tm || row).appendChild(pre)
+  }).catch(() => { /* 拉不到就不展开 */ })
+})
 function renderAutoList() {
   const box = $("autoList")
   if (!tasksCache.length) { box.innerHTML = `<div class="tk-empty">还没有定时任务，用上面的表单创建一个吧</div>`; return }

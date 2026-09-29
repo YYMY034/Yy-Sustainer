@@ -25,7 +25,7 @@ ok('状态行变量声明在 streamBuf 旁', /let streamBuf = ""\s*\nlet streamS
 
 console.log('=== ② WS 路由：过程状态一律进输出区，顶栏零过程状态（T59 收紧） ===')
 ok('status 事件写 streamStatusText 并同步 #streamStatusText',
-  /streamStatusText = m\.text \?\? ""/.test(script) && /const sst = \$\("streamStatusText"\); if \(sst\) sst\.textContent = streamStatusText/.test(script))
+  /streamStatusText = m\.text \?\? ""/.test(script) && /paintStreamStatus\(\)/.test(script)) // T98 起同步走 paintStreamStatus（计时+回合 token 一起画）
 ok('T59：有文本即 ensureStream 重建占位（步骤边界不漏回顶栏）',
   /if \(streamStatusText\) ensureStream\(\)/.test(script))
 ok('T59 反向：status 分支完全不写顶栏（无任何回落）',

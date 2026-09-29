@@ -47,9 +47,10 @@ function fakeProvider(req: import("node:http").IncomingMessage, res: import("nod
     // 假 provider 就无限重发同一个工具调用（第一版探针就是这么跑了 50 步的）。
     let messages: Array<{ role: string; content: unknown }> = []
     try { messages = (JSON.parse(raw) as { messages?: Array<{ role: string; content: unknown }> }).messages ?? [] } catch { /* 不是 JSON 就按没有 */ }
-    const hasToolResult = messages.some(
-      (m) => m.role === "tool" || (typeof m.content === "string" && m.content.includes("hi")),
-    )
+    // 只认 tool 消息判「是否已执行过工具」。原来还看 content 里有没有关键词——
+    // 用户文本「跑一下 echo hi」含 hi，第一跳就被判成已执行，两步脚本永远走不到
+    // （T98 扩展断言时抓到的探针 bug，不是引擎 bug——直接复现 onStep 是两次的）
+    const hasToolResult = messages.some((m) => m.role === "tool")
     const chunk = (delta: unknown, finish?: string, usage?: unknown): string =>
       `data: ${JSON.stringify({ id: "c", object: "chat.completion.chunk", choices: [{ index: 0, delta, ...(finish ? { finish_reason: finish } : {}) }], ...(usage ? { usage } : {}) })}\n\n`
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" })
@@ -58,6 +59,8 @@ function fakeProvider(req: import("node:http").IncomingMessage, res: import("nod
       res.write(chunk({ tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "echo hi" }) } }] }, "tool_calls", { prompt_tokens: FAKE_INPUT_TOKENS, completion_tokens: 5, total_tokens: FAKE_INPUT_TOKENS + 5 }))
     } else {
       res.write(chunk({ role: "assistant", content: "" }))
+      // T101：原生思考流（deepseek 风格 reasoning_content）——引擎应包 <thinking> 转发
+      res.write(chunk({ reasoning_content: "先确认 echo 已经跑过了" }))
       res.write(chunk({ content: "跑完了" }, "stop", { prompt_tokens: FAKE_INPUT_TOKENS, completion_tokens: 3, total_tokens: FAKE_INPUT_TOKENS + 3 }))
     }
     res.write("data: [DONE]\n\n")
@@ -132,6 +135,9 @@ try {
     await new Promise((s) => setTimeout(s, 500))
   }
   check("真的跑完了两步", assistantText.includes("跑完了"), JSON.stringify(assistantText))
+  // REST 轮询和 WS 投递是两条连接，没有顺序保证——最后几条 status（第二步的 turnIn）
+  // 可能还在路上，沉淀一下再分析事件（T98 第一版探针在这翻过车）
+  await new Promise((s) => setTimeout(s, 800))
 
   const statuses = events.filter((e) => e.type === "status")
   const withStep = statuses.filter((e) => typeof e.step === "number" && typeof e.maxSteps === "number")
@@ -149,6 +155,20 @@ try {
   check("status 事件带 ctxPct", withCtx.length > 0)
   check("ctxPct 用的是真实输入 token（不是估算）", withCtx.some((e) => e.ctxPct === EXPECT_PCT),
     `期望 ${EXPECT_PCT}%，实际 ${JSON.stringify(withCtx.map((e) => e.ctxPct))}`)
+
+  // T98：status 事件带本回合累计真实 token（turnIn/turnOut，来自 onStep 的累加）
+  const withTok = statuses.filter((e) => typeof e.turnIn === "number" && typeof e.turnOut === "number")
+  const lastTok = withTok[withTok.length - 1]
+  const expectIn = FAKE_INPUT_TOKENS + FAKE_INPUT_TOKENS // 两步各报一次 FAKE_INPUT_TOKENS
+  check("status 事件带 turnIn/turnOut", withTok.length > 0)
+  check("turnIn 是两步真实输入的累计", lastTok && (lastTok.turnIn as number) === expectIn,
+    `期望 ${expectIn}，实际 ${JSON.stringify(withTok.map((e) => e.turnIn))}；全部 status：${JSON.stringify(statuses.map((e) => ({ t: e.text, i: e.turnIn })))}`)
+
+  // T101：原生思考（reasoning_content）被包 <thinking> 走 text 流
+  const textDeltas = events.filter((e) => e.type === "text").map((e) => String(e.delta ?? ""))
+  const joined = textDeltas.join("")
+  check("reasoning 被包 <thinking> 标签进文本流", joined.includes("<thinking>") && joined.includes("先确认 echo 已经跑过了"), joined.slice(0, 160))
+  check("思考闭合且不污染正文断言（正文仍在）", joined.includes("</thinking>") && joined.includes("跑完了"), joined.slice(-120))
 } catch (e) {
   fail++
   console.log(`FAIL 运行出错 — ${(e as Error).message}`)

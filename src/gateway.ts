@@ -45,7 +45,7 @@ import { WebSocketServer, WebSocket } from "ws"
 import { runAgentStream, compactNow, type AgentResult } from "./agent/loop.js"
 import { resolveMcpLoading } from "./mcp/intent.js"
 import { describeFailure, retryBudget, isContextOverflow, contextOverflowHint } from "./agent/errors.js"
-import { setSessionPermission, deleteSessionPermission, getSessionPermission, onBgExit } from "./agent/tools.js"
+import { setSessionPermission, deleteSessionPermission, getSessionPermission, onBgExit, listBgSnapshot, bgLogTailById } from "./agent/tools.js"
 import { runBackupNow, listBackups, startBackupSchedule } from "./agent/backup.js"
 import { allowlistKeyFor } from "./agent/permissions.js"
 import { dockerAvailable } from "./agent/sandbox.js"
@@ -386,7 +386,11 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
   /** T93 P2：超时/停止时落库的正文。abort 会让 runAgentStream 早返回空 text，
    *  所以**超时也会走到成功分支**——这里必须自己区分，否则落成的永远是「（已停止）」 */
   const stopOrTimeoutContent = (): string => {
-    const text = (r?.text || streamedText || "").trim()
+    const rawText = (r?.text || "").trim()
+    // T101：原生思考落库成 <thinking> 块（Web 端 T63 折叠渲染）。只在用 r.text 时前置——
+    // 走 streamedText 兜底的（停止/超时）路径里思考已经随流式带过标签了，再前置就重复
+    const head = rawText && r?.reasoningText ? `<thinking>${r.reasoningText}</thinking>\n\n` : ""
+    const text = (head + (rawText || streamedText || "")).trim()
     // T93 P3：预算熔断也要和「用户主动停止」分开——都写「已停止」会让人以为是自己点了停止
     if (budgetStopped) {
       return text
@@ -538,12 +542,14 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
                 // 真实输入量也播出去——probe-real-long-task 的「每步输入 token」靠它
                 // 量固定开销基线（首步 = 系统提示 + 工具定义 + 用户消息）。
                 inputTokens,
+                // T98：本回合累计真实 token（前端状态行显示「本回合 N k tok」）
+                turnIn: turnTokens.in,
+                turnOut: turnTokens.out,
                 ...(liveCtxTokens > 0 ? { ctxPct: pctFromTokens(liveCtxTokens) } : {}),
               })
             },
             // R1：压缩过程可见——开始广播「压缩中」，完成广播「压缩完成 N 条 → M 条」
-            onCompact: (phase, info) =>
-              broadcast({
+            onCompact: (phase, info) =>              broadcast({
                 type: "status",
                 sessionId,
                 text: phase === "start" ? "压缩中：整理历史上下文…" : `压缩完成：${info?.before ?? "?"} 条 → ${info?.after ?? "?"} 条`,
@@ -581,6 +587,9 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
                 if (cpSteps >= CHECKPOINT_EVERY_STEPS && Date.now() - cpLastMs >= CHECKPOINT_MIN_GAP_MS) writeCp()
               }
             },
+            // T100：子代理分道——delegate 内部每步一条结构化事件（persona 维度），前端并行子代理各占一行
+            onSubStep: (info) =>
+              broadcast({ type: "sub-step", sessionId, persona: info.persona, step: info.step, maxSteps: info.maxSteps, tools: info.tools }),
           },
         )
         break
@@ -1759,6 +1768,14 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   }
   // P1-1 定时任务：列表（含最近一次结果）+ 立即运行（网关进程内跑，完成/失败弹 Windows toast + 广播）
   if (m === "GET" && p === "/api/tasks") return json(res, 200, taskListPayload())
+  // T99：后台任务面板——列表（内存 ∪ 磁盘快照）+ 日志尾（id 校验在引擎侧）
+  if (m === "GET" && p === "/api/bg") return json(res, 200, { tasks: listBgSnapshot() })
+  if (m === "GET" && p === "/api/bg/log") {
+    const id = url.searchParams.get("id")?.trim() ?? ""
+    const tail = id ? bgLogTailById(id) : null
+    if (!tail) return json(res, 404, { error: "未找到该任务的日志（任务不存在或日志已过保留期）" })
+    return json(res, 200, tail)
+  }
   // 自动化界面：新建 / 修改 / 删除 / 启停（写回 yyagentd.config.json + 即时调整调度）
   if (m === "POST" && p === "/api/tasks/create") {
     const body = JSON.parse((await readBody(req)) || "{}")

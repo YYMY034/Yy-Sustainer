@@ -90,6 +90,8 @@ export interface AgentResult {
    * 调用方用它替换原始历史落库，摘要才能跨轮累积；不落库的话每轮都要从全量重压一遍（成本 O(n²)）。
    */
   compactedStored?: StoredLike[]
+  /** T101：原生思考全文（provider reasoning 流累积）。仅流式主回合有；网关落库时前置 <thinking> 块 */
+  reasoningText?: string
 }
 
 export type StreamHandlers = {
@@ -103,6 +105,9 @@ export type StreamHandlers = {
   /** T93 P1：压缩一旦发生就把落库形态的新历史交出来——轮内 checkpoint 要带上它，
    *  否则中断恢复后会丢掉这一轮的压缩成果，下轮还得从全量重压 */
   onCompactedStored?: (stored: StoredLike[]) => void
+  /** T100：子代理步进（delegate 内部的每一步）。与 onStatus 的单行文本不同，
+   *  这里带 persona——前端按角色分道渲染，并行子代理各占一行不互相覆盖 */
+  onSubStep?: (info: { persona: string; step: number; maxSteps: number; tools: string[] }) => void
 }
 
 const TOOL_CN: Record<string, string> = {
@@ -286,7 +291,7 @@ async function runConverge(
   ]
   let steps = 0
   const result = toolCtx.run(
-    { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal, statusSink: (s: string) => handlers.onStatus?.(s) },
+    { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal, statusSink: (s: string) => handlers.onStatus?.(s), onSubStep: (info) => handlers.onSubStep?.(info) },
     () =>
       streamText({
         model: prep.model,
@@ -538,7 +543,7 @@ export async function runAgentStream(
   const t0 = Date.now()
   // T93：compactedStored 不是 AI SDK 选项，展开前摘掉；它随 AgentResult 回传给调用方落库
   const { compactedStored, ...modelOpts } = prep
-  const ctx = { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal, statusSink: (s: string) => handlers.onStatus?.(s) }
+  const ctx = { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal, statusSink: (s: string) => handlers.onStatus?.(s), onSubStep: (info: { persona: string; step: number; maxSteps: number; tools: string[] }) => handlers.onSubStep?.(info) }
   handlers.onStatus?.("思考中")
   let steps = 0
   // T91：已发起过的工具调用数。一旦 > 0，本次回合就可能已经产生副作用（写盘/执行命令/发请求），
@@ -552,6 +557,11 @@ export async function runAgentStream(
   /** T93：回合内压缩的落库形态。**必须单独存一份**——`prep.compactedStored` 只是回合开始前
    *  那次压缩的结果，回合内压的那次不会自动流进来，落库时就用不上，摘要等于白压。 */
   let midTurnStored: StoredLike[] | undefined
+  // T101：原生思考（provider 的 reasoning 流）。实时包 <thinking> 标签走 onText（Web 端 T63
+  // 折叠渲染立即生效）；全文累积进 reasoningText 随 AgentResult 回传，网关落库时前置成块。
+  // 标签开合是有状态的：进 reasoning 发 <thinking>，离开（下一个非 reasoning chunk）补 </thinking>。
+  let inReason = false
+  let reasoningText = ""
   // 回合内压过就用回合内的那份（更新）；没压过才用回合开始前那份。
   // **必须是函数**：const 会在声明时就地求值，那时 midTurnStored 还是 undefined，
   // 结果永远是「回合开始前那份」——回合内压的那次又被丢掉了。
@@ -660,7 +670,27 @@ export async function runAgentStream(
         // T74：这就是真实错误的藏身处。AI SDK 只在这里给一次，往后再问永远是
         // 「No output generated. Check the stream for errors.」。不接住 = 永久丢失病因。
         streamError = (chunk as { error?: unknown }).error ?? chunk
+      } else if (chunk.type === "reasoning-delta") {
+        // T101：原生思考增量（v5 流类型只有 reasoning-delta；字段名 text）
+        const d = String((chunk as { text?: string }).text ?? "")
+        if (d) {
+          if (!inReason) {
+            inReason = true
+            handlers.onText?.("<thinking>\n")
+          }
+          reasoningText += d
+          handlers.onText?.(d)
+        }
+      } else if (inReason) {
+        // 从思考切回正文/工具：补上闭合标签，T63 的折叠块才算完整
+        inReason = false
+        handlers.onText?.("\n</thinking>\n")
       }
+    }
+    if (inReason) {
+      // 流在思考里被打断（收尾/工具直接开始）：也要闭合，否则落库的是未闭合标签
+      inReason = false
+      handlers.onText?.("\n</thinking>\n")
     }
   } catch (e) {
     // abort 是用户主动停止：SDK 的 text/usage promise 也会 reject（AI_NoOutputGeneratedError），吃掉返回空文本——
@@ -713,5 +743,7 @@ export async function runAgentStream(
     model: opts.model,
     usage: { in: u?.inputTokens ?? 0, out: u?.outputTokens ?? 0, cached: u?.cachedInputTokens ?? 0 },
     compactedStored: finalStored(),
+    // T101：原生思考全文（无则为 undefined）。网关落库时前置成 <thinking> 块
+    ...(reasoningText ? { reasoningText } : {}),
   }
 }

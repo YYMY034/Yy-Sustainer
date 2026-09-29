@@ -63,6 +63,9 @@ export interface ToolContext {
   /** T97：主回合的状态回吐口（网关的 onStatus 广播）。delegate 借它把子代理进度
    *  顶到主对话的状态行上——原来子代理跑的时候主对话只看到 delegate 工具转圈，里面死活没人知道 */
   statusSink?: (text: string) => void
+  /** T100：子代理步进的结构化事件（区别于 statusSink 的单行文本——
+   *  多个子代理并行时文本会互相覆盖，分道渲染要按 persona 各自一行） */
+  onSubStep?: (info: { persona: string; step: number; maxSteps: number; tools: string[] }) => void
 }
 
 export const toolCtx = new AsyncLocalStorage<ToolContext>()
@@ -101,6 +104,33 @@ const bgSession = new Map<string, string | undefined>()
 const bgExitSubs: Array<(info: { id: string; sessionId?: string; exitCode?: number | null; command: string }) => void> = []
 export function onBgExit(cb: (info: { id: string; sessionId?: string; exitCode?: number | null; command: string }) => void): void {
   bgExitSubs.push(cb)
+}
+
+/** T99：给 /api/bg 面板用的合并快照（内存 ∪ 磁盘，按开始时间倒序）。
+ *  done=undefined 表示「磁盘记录、进程不在手上」——面板必须显示「状态未知」，不冒充终态。 */
+export function listBgSnapshot(): Array<{ id: string; command: string; logFile: string; startedAt: number; done: boolean | undefined; exitCode: number | null }> {
+  const rows: Array<{ id: string; command: string; logFile: string; startedAt: number; done: boolean | undefined; exitCode: number | null }> = []
+  const seen = new Set<string>()
+  for (const [id, e] of bgTasks) {
+    seen.add(id)
+    rows.push({ id, command: e.command, logFile: e.logFile, startedAt: e.startedAt, done: e.done, exitCode: e.exitCode ?? null })
+  }
+  for (const r of listBgTasks()) {
+    if (seen.has(r.id)) continue
+    rows.push({ id: r.id, command: r.command, logFile: r.logFile, startedAt: r.startedAt, done: r.endedAt !== undefined ? true : undefined, exitCode: r.exitCode ?? null })
+  }
+  rows.sort((a, b) => b.startedAt - a.startedAt)
+  return rows
+}
+
+/** T99：后台日志尾。id 必须对上已知记录（内存或磁盘），绝不拿请求参数拼路径 */
+export function bgLogTailById(id: string, lines = 40): { file: string; text: string } | null {
+  const e = bgTasks.get(id)
+  const rec = getBgTask(id)
+  const logFile = e?.logFile ?? rec?.logFile
+  if (!logFile || !existsSync(logFile)) return null
+  const all = readFileSync(logFile, "utf8").split(/\r?\n/)
+  return { file: logFile, text: all.slice(-lines).join("\n") }
 }
 
 function startBackground(command: string, cwd: string): string {
@@ -265,27 +295,38 @@ export const bgReadTool = tool({
     if (wait && e && !e.done) {
       const timeoutMs = Math.min(Math.max(waitTimeoutMs ?? 120_000, 1000), 600_000)
       const signal = toolCtx.getStore()?.signal
-      await new Promise<void>((resolve) => {
-        const w: { done: boolean } = { done: false }
-        const arr = bgWaiters.get(task_id) ?? []
-        let timer: ReturnType<typeof setTimeout> | undefined
-        const finish = (): void => {
-          if (w.done) return
-          w.done = true
-          if (timer) clearTimeout(timer)
-          const cur = bgWaiters.get(task_id)
-          if (cur) {
-            const i = cur.indexOf(finish)
-            if (i >= 0) cur.splice(i, 1)
-            if (!cur.length) bgWaiters.delete(task_id)
+      const sink = toolCtx.getStore()?.statusSink
+      const w0 = Date.now()
+      sink?.(`等待后台任务 ${task_id} 结束…`)
+      const iv = setInterval(() => {
+        // T98：等待也要可见——用户/模型能看出「在等后台命令」而不是卡死
+        sink?.(`等待后台任务 ${task_id} 结束…（已等 ${Math.round((Date.now() - w0) / 1000)}s）`)
+      }, 5000)
+      try {
+        await new Promise<void>((resolve) => {
+          const w: { done: boolean } = { done: false }
+          const arr = bgWaiters.get(task_id) ?? []
+          let timer: ReturnType<typeof setTimeout> | undefined
+          const finish = (): void => {
+            if (w.done) return
+            w.done = true
+            if (timer) clearTimeout(timer)
+            const cur = bgWaiters.get(task_id)
+            if (cur) {
+              const i = cur.indexOf(finish)
+              if (i >= 0) cur.splice(i, 1)
+              if (!cur.length) bgWaiters.delete(task_id)
+            }
+            resolve()
           }
-          resolve()
-        }
-        timer = setTimeout(finish, timeoutMs)
-        arr.push(finish)
-        bgWaiters.set(task_id, arr)
-        signal?.addEventListener("abort", finish, { once: true })
-      })
+          timer = setTimeout(finish, timeoutMs)
+          arr.push(finish)
+          bgWaiters.set(task_id, arr)
+          signal?.addEventListener("abort", finish, { once: true })
+        })
+      } finally {
+        clearInterval(iv)
+      }
     }
     // task_id 是模型给的输入——不合法就直接当「没这个任务」，绝不拿它拼路径
     const rec = getBgTask(task_id)
@@ -697,6 +738,8 @@ export const delegateTool = tool({
     // 现在可配（默认仍 30，不改变现状），且用满时明确标注。
     const cap = loadConfig().subagentMaxSteps ?? 30
     try {
+      // T100：子代理过程摘要（工具×次数）——回显进结果落库，历史回看不再是黑盒
+      const subToolCount: Record<string, number> = {}
       const r = await runAgent(task, {
         system: p.system,
         tools,
@@ -707,10 +750,16 @@ export const delegateTool = tool({
         broker: store?.broker,
         // T97：子代理每步进度顶到主对话状态行（带角色名与步数上限）。
         // statusSink 来自主回合的 toolCtx——子代理自己的工具跑在自己嵌套的 ctx 里，不会串台
-        onStep: (info) =>
-          store?.statusSink?.(`[子代理 ${persona}] 第 ${info.step}/${info.maxSteps} 步${info.tools.length ? "：" + info.tools.join(",") : ""}`),
+        onStep: (info) => {
+          for (const t of info.tools) subToolCount[t] = (subToolCount[t] ?? 0) + 1
+          store?.onSubStep?.({ persona, step: info.step, maxSteps: info.maxSteps, tools: info.tools })
+          store?.statusSink?.(`[子代理 ${persona}] 第 ${info.step}/${info.maxSteps} 步${info.tools.length ? "：" + info.tools.join(",") : ""}`)
+        },
       })
-      return subagentResult(r.text, r.steps, cap)
+      const procLine = Object.keys(subToolCount).length
+        ? `\n\n[子代理过程] ${Object.entries(subToolCount).map(([t, c]) => `${t}×${c}`).join("、")}（共 ${r.steps} 步）`
+        : ""
+      return subagentResult(r.text + procLine, r.steps, cap)
     } catch (e) {
       return `[子任务失败] ${(e as Error).message}`
     }

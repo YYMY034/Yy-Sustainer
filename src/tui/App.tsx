@@ -1951,13 +1951,17 @@ export function App(): React.ReactElement {
   // 把所有消息按显示宽度包裹成行序列：每条消息 = 头行 + 内容物理行 + 空行（+步骤提示行）
   // scrollOffset = 从底部往上数的行偏移；视口 = 行序列的尾部切片，长消息因此可逐行上滑
   const effW = Math.max(20, columns - (sidebar ? (showModelPanel ? 46 : 32) : 0) - (sideOpen ? 40 : 0) - 6)
+  // T101：原生思考落库成 <thinking> 块（Web 折叠渲染）；TUI 没有折叠交互，剥掉标签只留正文，
+  // 未闭合的（历史遗留半截）也一并剥——裸标签比少一段思考更伤可读性
+  const stripThinking = (s: string): string =>
+    s.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").replace(/<thinking>[\s\S]*$/g, "").trim()
   type Row = { kind: "head" | "body" | "spacer" | "steps"; m?: StoredMessage; text?: string; mIdx?: number }
   const allRows: Row[] = []
   messages.forEach((m, mi) => {
     if (m.role === "system") return // T55：模型切换等系统提示只在 Web 渲染为分隔线，TUI 跳过
     const isUser = m.role === "user"
     allRows.push({ kind: "head", m, mIdx: mi, text: `${isUser ? "你" : "Yy Sustainer"} · ${new Date(m.ts).toLocaleTimeString("zh-CN")}` })
-    for (const l of wrapText(m.content, effW)) allRows.push({ kind: "body", m, mIdx: mi, text: l })
+    for (const l of wrapText(m.role === "assistant" ? stripThinking(m.content) : m.content, effW)) allRows.push({ kind: "body", m, mIdx: mi, text: l })
     if (m.role === "assistant" && m.steps?.length) {
       allRows.push({ kind: "steps", m, mIdx: mi, text: `⚙ 经 ${m.steps.length} 步工具调用完成 · 本会话步骤可 Ctrl+J/K 浏览` })
     }

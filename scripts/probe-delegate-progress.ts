@@ -122,10 +122,12 @@ try {
 
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`)
   const statuses: string[] = []
+  const subSteps: Array<{ persona: string; step: number; maxSteps: number; tools: string[] }> = []
   ws.on("message", (data) => {
     try {
-      const m = JSON.parse(String(data)) as { type: string; text?: string }
+      const m = JSON.parse(String(data)) as { type: string; text?: string; persona?: string; step?: number; maxSteps?: number; tools?: string[] }
       if (m.type === "status" && typeof m.text === "string") statuses.push(m.text)
+      if (m.type === "sub-step" && m.persona) subSteps.push({ persona: m.persona, step: m.step ?? 0, maxSteps: m.maxSteps ?? 0, tools: m.tools ?? [] })
     } catch { /* 非 JSON 忽略 */ }
   })
   await new Promise<void>((r) => ws.on("open", r))
@@ -156,6 +158,10 @@ try {
   check("进度带当前工具名", subStatuses.some((s) => s.includes("bash")), subStatuses.slice(0, 3).join(" | "))
   check("主回合自身状态未被污染（思考中 原样在）", statuses.includes("思考中"), JSON.stringify(statuses.slice(0, 3)))
   check("回合正常收尾（结果回显回到主对话）", finalText.includes("子任务结果回显") && finalText.includes("子任务完成"), finalText.slice(0, 160))
+  // T100：结构化 sub-step 事件——分道渲染的数据源，必须带 persona/step/maxSteps/tools
+  check("sub-step 结构化事件到达（≥2 条）", subSteps.length >= 2, JSON.stringify(subSteps.slice(0, 3)))
+  check("sub-step 字段完整（persona/步数/工具）", subSteps.every((s) => s.persona === "coder" && s.maxSteps === 5 && s.step > 0), JSON.stringify(subSteps[0] ?? null))
+  check("过程摘要落库（[子代理过程] 工具×次数）", finalText.includes("[子代理过程]") && finalText.includes("bash×2"), finalText.slice(0, 220))
 } catch (e) {
   fail++
   console.log(`FAIL 运行出错 — ${(e as Error).stack ?? e}`)

@@ -55,7 +55,7 @@ test("静态：delegate 读配置而不是硬编码，且默认 30", () => {
   assert.equal(/maxSteps: 30,/.test(src), false, "还在硬编码 30")
   assert.match(src, /const cap = loadConfig\(\)\.subagentMaxSteps \?\? 30/, "没有从配置读，或默认值不是 30")
   assert.match(src, /maxSteps: cap,/, "runAgent 没用 cap")
-  assert.match(src, /return subagentResult\(r\.text, r\.steps, cap\)/, "返回没走 subagentResult")
+  assert.match(src, /return subagentResult\(r\.text \+ procLine, r\.steps, cap\)/, "返回没走 subagentResult（T100 起回显带过程摘要）")
   const cfg = readSrc("src/agent/config.ts")
   assert.match(cfg, /subagentMaxSteps\?: number/, "config 里没有 subagentMaxSteps")
   // 不该复用 maxSteps——子任务是有界聚焦的活，预算不是同一个概念

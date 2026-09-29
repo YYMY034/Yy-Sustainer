@@ -122,10 +122,12 @@ try {
 
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`)
   let bgExit: { sessionId?: string; id?: string; exitCode?: number | null } | undefined
+  const statuses: string[] = []
   ws.on("message", (data) => {
     try {
-      const m = JSON.parse(String(data)) as { type: string; sessionId?: string; id?: string; exitCode?: number | null }
+      const m = JSON.parse(String(data)) as { type: string; sessionId?: string; id?: string; exitCode?: number | null; text?: string }
       if (m.type === "bg-exit") bgExit = m
+      if (m.type === "status" && typeof m.text === "string") statuses.push(m.text)
     } catch { /* 非 JSON 忽略 */ }
   })
   await new Promise<void>((r) => ws.on("open", r))
@@ -156,6 +158,17 @@ try {
   check("bg-exit 的 id/exitCode 正确", bgExit?.id === "bg-1" && bgExit?.exitCode === 0, JSON.stringify(bgExit ?? null))
   check("bg_read(wait) 等到了结束态而不是「运行中」", finalText.includes("已结束(code=0)"), finalText.slice(0, 200))
   check("bg_read(wait) 带回了日志输出", finalText.includes("bg_read 结果回显"), finalText.slice(0, 200))
+  // T98：等待期间状态行必须可感知（进入 wait 立即推一条，不等 5s 心跳）
+  check("等待原因上了状态流（bg_read wait）", statuses.some((s) => s.includes("等待后台任务 bg-1")), JSON.stringify(statuses.slice(0, 6)))
+
+  // T99：/api/bg 面板数据源——任务在列且终态如实；日志尾可读；假 id 404
+  const bgList = (await (await fetch(`${BASE}/api/bg`)).json()) as { tasks: Array<{ id: string; done?: boolean; exitCode: number | null }> }
+  const rec = bgList.tasks.find((t) => t.id === "bg-1")
+  check("/api/bg 列出 bg-1 且 done=true", !!rec && rec.done === true && rec.exitCode === 0, JSON.stringify(rec ?? null))
+  const logTail = (await (await fetch(`${BASE}/api/bg/log?id=bg-1`)).json()) as { file?: string; text?: string; error?: string }
+  check("/api/bg/log 返回日志尾", typeof logTail.text === "string" && typeof logTail.file === "string" && logTail.file.includes("bg-1.log"), JSON.stringify(logTail).slice(0, 120))
+  const bogus = await fetch(`${BASE}/api/bg/log?id=bg-999`)
+  check("/api/bg/log 假 id 返回 404", bogus.status === 404, `status=${bogus.status}`)
 
   // ③ 反向：对不存在的任务 wait 立即返回（不挂 30 秒超时）
   const t0 = Date.now()
