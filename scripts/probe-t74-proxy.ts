@@ -1,4 +1,6 @@
 // T74 追查：本地 provider 报 502 Bad Gateway（而非 ECONNREFUSED）——是不是 http_proxy 在转发？
+// ⚠️ 本探针里的端口（8899=被诊断的本地通道、49743=被诊断的代理）**即诊断对象**，
+//    intentionally 不动态化——换端口就换了诊断目标。改它前先读这段。
 console.log("环境变量:")
 for (const k of ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]) {
   console.log(`  ${k}=${process.env[k] ?? "(未设置)"}`)

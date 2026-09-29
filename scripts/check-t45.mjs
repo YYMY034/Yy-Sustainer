@@ -60,7 +60,8 @@ ok("B5 回填只在未被用户动过时生效（防抢滚动条）", js.include
 // ---- C. 设置页左类别栏（T45④） ----
 const navBlock = html.slice(html.indexOf('id="setNav"'), html.indexOf('id="setBody"'))
 const secIds = ["secUsage", "secAppearance", "secModel", "secSearch", "secDb", "secMcp", "secHotkey", "secAbout"]
-eq("C1 左栏 9 个类别按钮（T66 加钩子）", (navBlock.match(/class="sn-item/g) ?? []).length, 9)
+// 10 个 = 外观/钩子/数据与安全/模型/搜索引擎/数据库/MCP/快捷键/关于 + 「使用统计」（用量双图入口）
+eq("C1 左栏 10 个类别按钮（T66 加钩子，后增使用统计）", (navBlock.match(/class="sn-item/g) ?? []).length, 10)
 ok("C2 data-sec 与 8 张卡片的 id 一一对应", secIds.every((id) => navBlock.includes(`data-sec="${id}"`) && html.includes(`id="${id}"`)))
 ok("C3 set-shell/set-nav CSS 存在", css.includes(".set-shell") && css.includes(".set-nav .sn-item.active"))
 ok("C4 新样式不碰公用类（.page 规则未被 set 样式污染）", !/\.page\s*{[^}]*set-/.test(css))

@@ -1,32 +1,16 @@
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs"
+import { mkdirSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import cron from "node-cron"
 import { runAgent } from "./agent/loop.js"
 import { loadConfig as loadAgentConfig } from "./agent/config.js"
+import { loadDaemonTasks, type DaemonTask as Task } from "./agent/taskstore.js"
+// T92：history.jsonl 走带轮转的写入（原来只增不减）
+import { appendLogLine } from "./util/logfile.js"
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const LOGS = join(PKG_ROOT, "logs")
-
-interface Task {
-  name: string;
-  cron: string;
-  prompt: string;
-  cwd?: string;
-  model?: string;
-  timeoutMs?: number;
-  enabled?: boolean;
-}
-
-interface Config {
-  tasks: Task[];
-}
-
-function loadConfig(): Config {
-  const file = join(PKG_ROOT, "yyagentd.config.json")
-  return JSON.parse(readFileSync(file, "utf8")) as Config
-}
 
 function notify(title: string, message: string): void {
   const ps = join(PKG_ROOT, "scripts", "toast.ps1")
@@ -61,7 +45,7 @@ async function runOnce(task: Task): Promise<void> {
       const mark = "OK"
       console.log(`[${new Date().toISOString()}] ${mark} ${task.name} ${r.steps}步 ${Math.round((Date.now() - t0) / 1000)}s`)
       notify(`Yy Sustainer · ${task.name}`, `任务完成（${r.steps} 步）：${r.text.slice(0, 60)}`)
-      appendFileSync(join(LOGS, "history.jsonl"), JSON.stringify({
+      appendLogLine(join(LOGS, "history.jsonl"), JSON.stringify({
       ts: new Date().toISOString(),
       task: task.name,
       ok: true,
@@ -73,7 +57,7 @@ async function runOnce(task: Task): Promise<void> {
     const msg = (e as Error).message
     console.log(`[${new Date().toISOString()}] FAIL ${task.name}: ${msg}`)
     notify(`Yy Sustainer · ${task.name} 失败`, msg.slice(0, 80))
-    appendFileSync(join(LOGS, "history.jsonl"), JSON.stringify({
+    appendLogLine(join(LOGS, "history.jsonl"), JSON.stringify({
       ts: new Date().toISOString(),
       task: task.name,
       ok: false,
@@ -88,10 +72,10 @@ async function runOnce(task: Task): Promise<void> {
 }
 
 function cmdStart(): void {
-  const cfg = loadConfig()
+  const tasks = loadDaemonTasks()
   mkdirSync(LOGS, { recursive: true })
   let scheduled = 0
-  for (const t of cfg.tasks) {
+  for (const t of tasks) {
     if (t.enabled === false) {
       console.log(`disabled: ${t.name}`)
       continue
@@ -117,7 +101,7 @@ function cmdStart(): void {
 }
 
 function cmdRun(name: string): void {
-  const t = loadConfig().tasks.find((x) => x.name === name)
+  const t = loadDaemonTasks().find((x) => x.name === name)
   if (!t) {
     console.error(`no task: ${name}`)
     process.exitCode = 1
@@ -127,7 +111,7 @@ function cmdRun(name: string): void {
 }
 
 function cmdList(): void {
-  for (const t of loadConfig().tasks) {
+  for (const t of loadDaemonTasks()) {
     const on = t.enabled === false ? "-" : "*"
     console.log(`${on} ${t.name}  ${t.cron}  model=${t.model ?? "(default)"}`)
   }

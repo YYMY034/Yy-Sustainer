@@ -35,8 +35,9 @@ export async function describeImageBase64(b64: string, visionModelSpec?: string)
   const prov = createOpenAICompatible({ name: providerName, baseURL: provider.baseURL, apiKey: provider.apiKey })
   const r = await generateText({
     model: prov.chatModel(modelId),
-    // T73：识图转述同样注入基础层；严格输出契约（只转述、不额外发挥）放 role 槽
+    // T91：识图转述是内部单一职责调用 → 精简基础层；严格输出契约（只转述、不额外发挥）放 role 槽
     system: composeSystem({
+      compactBase: true,
       role: "你是图像转述器。只做一件事：把图片内容完整、忠实地转述成中文文字（界面元素、文字、图表、数据、关键信息）。不要评价、不要替用户回答图片里的问题、不要输出对话语句——你的输出会被转交给另一个模型作为唯一信息来源。",
     }),
     messages: [

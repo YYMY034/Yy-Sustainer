@@ -17,8 +17,8 @@ let pass = 0, fail = 0
 const ok = (n, v, extra) => { if (v) { pass++; console.log('OK   ' + n) } else { fail++; console.log('FAIL ' + n + (extra ? '  → ' + extra : '')) } }
 
 console.log('=== ① 流式占位内状态行 ===')
-ok('占位含条件渲染的 stream-status 行（spinner + esc(streamStatusText)）',
-  /\$\{streamStatusText \? `<div class="stream-status" id="streamStatus"><span class="spinner"><\/span><span id="streamStatusText">\$\{esc\(streamStatusText\)\}<\/span><\/div>` : ""\}/.test(script))
+ok('占位含条件渲染的 stream-status 行（T87 shimmer 文字）',
+  script.includes('id="streamStatusText" class="shimmer-text"'))
 ok('位于 .who（光标行）之后、#activity 之前',
   script.indexOf('id="streamStatus"') > script.indexOf('id="thinkSpin"') && script.indexOf('id="streamStatus"') < script.indexOf('<div id="activity"></div><div class="body" id="streamBody"'))
 ok('状态行变量声明在 streamBuf 旁', /let streamBuf = ""\s*\nlet streamStatusText = ""/.test(script))
@@ -39,9 +39,8 @@ ok('T59：refreshState busy 兜底走输出区（ensureStream），顶栏不再�
   !/\$\("status"\)\.textContent = busy\(\)/.test(script))
 
 console.log('=== ③ CSS ===')
-ok('.stream-status 金色小字 + spinner（沿用 spin 关键帧）',
-  /color:\s*var\(--warn\)/.test(rule('.stream-status')) &&
-  /animation:\s*spin \.8s linear infinite/.test(rule('.stream-status .spinner')), rule('.stream-status .spinner'))
+ok('.stream-status 状态文字 shimmer（T87 无圆形 spinner）',
+  !cssNoCmt.includes('.stream-status .spinner') && !!rule('.stream-status .shimmer-text'))
 
 console.log('=== ④ 语法与配平 ===')
 try { writeFileSync('scripts/.t57-tmp.mjs', script + '\n'); execFileSync('node', ['--check', 'scripts/.t57-tmp.mjs']); unlinkSync('scripts/.t57-tmp.mjs'); ok('整段 <script> node --check 通过', true) }

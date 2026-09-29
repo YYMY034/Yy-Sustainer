@@ -3,13 +3,14 @@
 //  第二部分：真实错误分类（用本地假 provider 造 401/402/500/死端口/流中断，跑真的 describeFailure）
 import { readFileSync } from "node:fs"
 import http from "node:http"
+import net from "node:net"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { streamText } from "ai"
 import { describeFailure, retryBudget, asDiagnosedError } from "../src/agent/errors.js"
 
 let pass = 0
 let fail = 0
-const ok = (n, v) => {
+const ok = (n: string, v: unknown) => {
   if (v) {
     pass++
     console.log("OK   " + n)
@@ -18,7 +19,7 @@ const ok = (n, v) => {
     console.log("FAIL " + n)
   }
 }
-const R = (p) => readFileSync(p, "utf8")
+const R = (p: string) => readFileSync(p, "utf8")
 
 const errors = R("src/agent/errors.ts")
 const loop = R("src/agent/loop.ts")
@@ -39,9 +40,12 @@ ok("A8 每条错误都带中文自查提示", errors.includes("本地服务未�
 console.log("B. 引擎侧接住流内真实错误（loop.ts）")
 ok("B1 声明 streamError 容器", loop.includes("let streamError: unknown = null"))
 ok("B2 fullStream 里捕获 error chunk", /chunk\.type === "error"\) \{\s*[\s\S]{0,200}streamError = \(chunk as \{ error\?: unknown \}\)\.error/.test(loop))
-ok("B3 fullStream 正常结束但带 streamError 时也抛出真实原因", loop.includes("if (streamError) throw asDiagnosedError(streamError)"))
-ok("B4 catch 优先用 streamError 覆盖 SDK 的废话", loop.includes("throw asDiagnosedError(streamError ?? e)"))
-ok("B5 result.text 的 reject 也过一遍诊断", loop.includes("throw asDiagnosedError(e)"))
+// T91：所有 asDiagnosedError 调用点都多带了 { executedToolCalls }——把「本回合已发起的工具调用数」
+// 挂到错误对象上，供网关重试循环判断「能不能安全重发」（>0 就不能，否则重复副作用）。
+ok("B3 fullStream 正常结束但带 streamError 时也抛出真实原因", loop.includes("if (streamError) throw asDiagnosedError(streamError, { executedToolCalls })"))
+ok("B4 catch 优先用 streamError 覆盖 SDK 的废话", loop.includes("throw asDiagnosedError(streamError ?? e, { executedToolCalls })"))
+ok("B5 result.text 的 reject 也过一遍诊断", loop.includes("throw asDiagnosedError(e, { executedToolCalls })"))
+ok("B5b 错误对象带 executedToolCalls（重试幂等护栏的数据源）", loop.includes("let executedToolCalls = 0") && loop.includes("executedToolCalls++"))
 ok("B6 上游成功但零 token 零步骤 → 明确报错（不再静默落空消息）", loop.includes("上游成功响应但未产出任何 token"))
 ok("B7 主调用关掉 SDK 内置重试（不与网关可见重试叠加）", /streamText\(\{[\s\S]{0,200}?maxRetries: 0/.test(loop))
 
@@ -94,7 +98,7 @@ const server = http.createServer((req, res) => {
 })
 
 /** 跑一次 streamText，把「真实错误」按引擎同款路径取出来（error chunk 优先，其次抛出物） */
-async function grabError(baseURL) {
+async function grabError(baseURL: string) {
   const p = createOpenAICompatible({ name: "t74", baseURL, apiKey: "sk-x" })
   const result = streamText({ model: p.chatModel("m"), prompt: "你好" })
   let chunkErr = null
@@ -117,7 +121,20 @@ async function grabError(baseURL) {
 }
 
 async function main() {
-  await new Promise((r) => server.listen(PORT, "127.0.0.1", () => r()))
+  await new Promise<void>((r) => server.listen(PORT, "127.0.0.1", () => r()))
+
+  // E5 的死端口**动态选**：硬编码 8899 被机器上别的服务（实测：WorkBuddy 自管的
+  // python 基础设施）占用过，连接成功返 404 → 分类从 network 变 notfound，
+  // 检查莫名其妙红了一下午。做法：向内核要一个空闲端口、立刻松开再用
+  // （竞态窗口极小，且真被抢了失败信息也明确）。
+  const deadPort = await new Promise<number>((resolve, reject) => {
+    const s = net.createServer()
+    s.once("error", reject)
+    s.listen(0, "127.0.0.1", () => {
+      const p = (s.address() as net.AddressInfo).port
+      s.close(() => resolve(p))
+    })
+  })
 
   console.log("E. 真实错误 → 分类与文案（跑真的 describeFailure）")
   const cases = [
@@ -125,7 +142,7 @@ async function main() {
     { name: "E2 402 余额不足", url: `http://127.0.0.1:${PORT}/case402/v1`, kind: "quota", retry: false, has: "Insufficient balance" },
     { name: "E3 500 服务端错误（被 SDK 包成 RetryError）", url: `http://127.0.0.1:${PORT}/case500/v1`, kind: "server", retry: true, has: "model overloaded" },
     { name: "E4 404 模型不存在", url: `http://127.0.0.1:${PORT}/case404/v1`, kind: "notfound", retry: false, has: "model not found" },
-    { name: "E5 死端口（连接拒绝）", url: "http://127.0.0.1:8899/v1", kind: "network", retry: true, has: "ECONNREFUSED" },
+    { name: `E5 死端口（连接拒绝，动态选到 ${deadPort}）`, url: `http://127.0.0.1:${deadPort}/v1`, kind: "network", retry: true, has: "ECONNREFUSED" },
     { name: "E6 流中途断掉", url: `http://127.0.0.1:${PORT}/caseMid/v1`, kind: "network", retry: true, has: "Failed to process successful response" },
   ]
   for (const c of cases) {

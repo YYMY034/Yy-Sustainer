@@ -7,7 +7,14 @@
     "strict": true,
     "noEmit": true,
     "types": ["node"],
-    "skipLibCheck": true
+    "skipLibCheck": true,
+
+    // scripts/ 里 53 个 .mjs 是历史回归脚本。allowJs 只把它们**解析**进程序（能查语法错误），
+    // checkJs 保持 false —— 打开后是 501 个错误（多为脚本里随手写的隐式 any），
+    // 修它属于给一次性脚本做无收益的返工。要查的那部分（.ts 脚本）已由 strict 全量覆盖。
+    "allowJs": true,
+    "checkJs": false
   },
-  "include": ["src"]
+  // scripts/ 整体纳入：15 个 .ts 脚本走 strict 全检，53 个 .mjs 走语法级检查。
+  "include": ["src", "tests", "scripts"]
 }

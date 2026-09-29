@@ -7,7 +7,10 @@ import WebSocket from "ws"
 
 const BASE = "http://127.0.0.1:8642"
 
-async function api(method, path, body) {
+/** WS 广播事件的宽松类型：字段随 type 变化，探测脚本不做穷尽建模 */
+type WsEvent = Record<string, any>
+
+async function api(method: string, path: string, body?: unknown) {
   const r = await fetch(BASE + path, {
     method,
     headers: body ? { "content-type": "application/json" } : undefined,
@@ -21,8 +24,8 @@ async function api(method, path, body) {
   }
 }
 
-async function runCase(model, waitMs) {
-  const events = []
+async function runCase(model: string, waitMs: number) {
+  const events: WsEvent[] = []
   let sid = ""
   let created = false
   try {
@@ -76,9 +79,10 @@ async function runCase(model, waitMs) {
 
 let pass = 0,
   fail = 0
-const ok = (n, v) => {
+const ok = (n: string, v: unknown) => {
   console.log((v ? "  OK   " : "  FAIL ") + n)
-  v ? pass++ : fail++
+  if (v) pass++
+  else fail++
 }
 
 // ---------- A) b.ai 正常路径 ----------

@@ -37,15 +37,21 @@
 import http from "node:http"
 import fs from "node:fs"
 import path from "node:path"
+import crypto from "node:crypto"
 import childProcess from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { homedir } from "node:os"
 import { WebSocketServer, WebSocket } from "ws"
 import { runAgentStream, compactNow, type AgentResult } from "./agent/loop.js"
-import { describeFailure, retryBudget } from "./agent/errors.js"
+import { resolveMcpLoading } from "./mcp/intent.js"
+import { describeFailure, retryBudget, isContextOverflow, contextOverflowHint } from "./agent/errors.js"
 import { setSessionPermission, deleteSessionPermission, getSessionPermission } from "./agent/tools.js"
+import { runBackupNow, listBackups, startBackupSchedule } from "./agent/backup.js"
+import { allowlistKeyFor } from "./agent/permissions.js"
+import { dockerAvailable } from "./agent/sandbox.js"
 import { QuestionBroker } from "./agent/ask.js"
 import { loadConfig, saveConfig, setDefaultModel, resolveModel, addModelToProvider } from "./agent/config.js"
+import { loadDaemonTasks as storeLoadDaemonTasks, saveDaemonTasks as storeSaveDaemonTasks, type DaemonTask } from "./agent/taskstore.js"
 // P-1 发行版：本地免费模型（Ollama）一键下载 / 检测 / 写 provider
 import { ollamaStatus, ensureOllamaRunning, pullModel, wireOllamaProvider, MODEL_CHOICES } from "./agent/ollama.js"
 import {
@@ -56,23 +62,77 @@ import {
   deleteSession,
   toCoreMessages,
   truncateFrom,
+  repairIndex,
   type StoredMessage,
 } from "./session/store.js"
-import { readTodo, deleteTodo } from "./agent/todo.js"
+// T93 P1 轮内 checkpoint：长任务被进程杀掉时，已流出的正文与工具步骤是唯一的线索
+import {
+  CHECKPOINT_EVERY_MS,
+  CHECKPOINT_EVERY_STEPS,
+  CHECKPOINT_MIN_GAP_MS,
+  saveCheckpoint,
+  loadCheckpoint,
+  clearCheckpoint,
+  listCheckpoints,
+  describeCheckpoint,
+  resumeAssistantContent,
+  type CheckpointMessage,
+} from "./session/checkpoint.js"
+// T92 会话图片外置：落库前把 dataUrl 换成 /api/file 引用，会话文件不再被 base64 撑爆
+import {
+  externalizeImages,
+  attachmentToBase64,
+  migrateInlineImages,
+  removeSessionAttachments,
+  pruneAttachments,
+  referencedPaths,
+  sweepOrphanAttachments,
+  sweepUnreferencedAttachments,
+  attachmentsUsage,
+  attachmentsRoot,
+} from "./session/attachments.js"
+
+/** 附件占用超过这个量就在启动日志里提醒（只提醒，不自动删——那是用户的图，不是缓存） */
+const ATTACH_WARN_BYTES = 2 * 1024 * 1024 * 1024
+import { readTodo, deleteTodo, todoPrompt } from "./agent/todo.js"
 // T45 用量账本：逐轮 token 消耗落一份 append-only 明细，供热力图 / 环形图按日按模型聚合
 import { appendUsage, backfillUsage, usageDaily, usageByModel, pruneUsage } from "./session/usage.js"
 import { beginFileTracking, takeFileEdits } from "./agent/fileTrack.js"
+import { removeUndoTurn, resolveUndoTurn, saveUndoTurn, sweepUndoSnapshots, undoMissReason } from "./agent/undoStore.js"
 import { listDbs, getDb, upsertDbRecord, deleteDbRecord, queryDb, isValidDbName, BUILTIN_DBS } from "./agent/db.js"
 import { countTokens } from "gpt-tokenizer"
 import cronLib from "node-cron"
 import type { FileEdit } from "./agent/fileTrack.js"
+// T92 日志轮转：history.jsonl 只增不减，跑几个月就几百 MB
+import { appendLogLine } from "./util/logfile.js"
+import { isLanShare, resolveListenHost } from "./util/net.js"
+import { isAllowedFileExt, MIME_BY_EXT } from "./util/filetypes.js"
 
 // D6 撤销快照池：sessionId -> (assistantMsgTs -> 本轮文件快照)；撤销 = 按快照恢复/删除文件
 const undoSnapshots = new Map<string, Map<number, FileEdit[]>>()
 
 const PORT = Number(process.env.YYAGENT_GATEWAY_PORT ?? 8642)
-// P2-4 分享：默认 0.0.0.0（局域网可访问 /api/file 分享链接）；YYAGENT_HOST 可收回本机
-const HOST = process.env.YYAGENT_HOST ?? "0.0.0.0"
+// T92 安全默认：只监听本机。
+// 原来默认 0.0.0.0——同网段任何人扫到端口就能看到这个 agent 的存在（虽然 /api/* 有配对 token 兜底，
+// 但「默认不该对外」比「对外了再加锁」更正确；咖啡馆/公司 Wi-Fi 下尤其明显）。
+// 需要局域网分享（P2-4：手机打开 /api/file 成果链接）时显式打开：config.lanShare = true，或 YYAGENT_HOST=0.0.0.0。
+const HOST = (() => {
+  let lanShare: boolean | undefined
+  try {
+    lanShare = loadConfig().lanShare
+  } catch {
+    /* 配置读不到 → 走最安全的默认 */
+  }
+  return resolveListenHost(process.env.YYAGENT_HOST, lanShare)
+})()
+/** 是否对外（供 /api/pair 告知前端：分享链接在本机之外能不能打开） */
+const LAN_SHARE = isLanShare(HOST)
+// T80 局域网鉴权：配对 token（首次启动自动生成，存 config.authToken）；本机请求永远放行
+let authToken = ""
+function isLocalReq(req: { socket?: { remoteAddress?: string } }): boolean {
+  const ip = req.socket?.remoteAddress ?? ""
+  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1"
+}
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const WEB_DIR = path.join(__dirname, "..", "web")
 // P-1 发行版可写性：包内 logs 目录在打包后位于**只读的 asar** 里，往里写会抛 EROFS/EPERM。
@@ -121,6 +181,21 @@ function broadcast(msg: Record<string, unknown>): void {
   }
 }
 
+/** T93 P3：会话已消耗的 token（输入 + 输出）。缓存命中不计——它不额外花钱。 */
+function sessionTokensUsed(usage: { in: number; out: number } | undefined): number {
+  return (usage?.in ?? 0) + (usage?.out ?? 0)
+}
+
+/** T93 P3：超限时给人看的一句——必须带上数字和补救办法，否则用户只会看到「被拦了」。 */
+function budgetExceededNotice(used: number, budget: number, where: "before" | "during"): string {
+  const when = where === "before" ? "已达到" : "已超出"
+  return (
+    `本会话 token 预算${when}上限：已用 ${used.toLocaleString()} / 上限 ${budget.toLocaleString()}。` +
+    `为控制成本已停止继续调用模型。` +
+    `需要继续可调大 config.sessionTokenBudget，或新建会话（预算是按会话累计的）。`
+  )
+}
+
 function calcCtxPct(msgs: Array<{ content: string }>): number {
   try {
     const c = loadConfig()
@@ -131,26 +206,26 @@ function calcCtxPct(msgs: Array<{ content: string }>): number {
   }
 }
 
-// ---- P1-1 定时任务（网关进程内运行 + Windows toast 通知） ----
-interface DaemonTask { name: string; cron: string; prompt: string; cwd?: string; model?: string; timeoutMs?: number; enabled?: boolean }
-interface TaskRunRec { ok: boolean; ts: number; durationMs?: number; report?: string; error?: string }
-
-function daemonConfigPath(): string {
-  return path.join(__dirname, "..", "yyagentd.config.json")
-}
-function loadDaemonTasks(): DaemonTask[] {
+/** T93 P2：由真实 token 数算上下文占用（与 calcCtxPct 同一把尺子，只是输入是实测值而不是重新数正文） */
+function pctFromTokens(tokens: number): number {
   try {
-    return (JSON.parse(fs.readFileSync(daemonConfigPath(), "utf8")).tasks ?? []) as DaemonTask[]
+    return Math.min(100, Math.round((tokens / (loadConfig().contextTokens ?? 131_072)) * 100))
   } catch {
-    return []
+    return 0
   }
 }
-// 自动化界面：写回 yyagentd.config.json 的 tasks（保留其余字段）
+
+// ---- P1-1 定时任务（网关进程内运行 + Windows toast 通知） ----
+interface TaskRunRec { ok: boolean; ts: number; durationMs?: number; report?: string; error?: string }
+
+// T91：任务存储统一走 taskstore（~/.yyagent/tasks.json，首次自动从安装目录迁移）——
+// 原先读写的是安装目录里的 yyagentd.config.json，打包态既写不进去、两个入口还解析到不同文件。
+function loadDaemonTasks(): DaemonTask[] {
+  return storeLoadDaemonTasks()
+}
+// 自动化界面：写回任务文件（原子写，临时文件 + rename）
 function saveDaemonTasks(tasks: DaemonTask[]): void {
-  let cfg: Record<string, unknown> = {}
-  try { cfg = JSON.parse(fs.readFileSync(daemonConfigPath(), "utf8")) } catch { /* 新文件 */ }
-  cfg.tasks = tasks
-  fs.writeFileSync(daemonConfigPath(), JSON.stringify(cfg, null, 2) + "\n")
+  storeSaveDaemonTasks(tasks)
 }
 // ---- 网关进程内 cron 调度：新建/修改/启停即时生效，无需重启 daemon ----
 const cronJobs = new Map<string, ReturnType<typeof cronLib.schedule>>()
@@ -206,6 +281,18 @@ function toast(title: string, message: string): void {
     }).unref()
   } catch { /* 通知失败不影响任务 */ }
 }
+// T85 完成通知：本地 toast（默认开）+ 可选 webhook 推送（ntfy/Server酱——POST 正文即文本）
+function notifyDone(title: string, message: string): void {
+  const n = loadConfig().notify
+  if (n?.toast !== false) toast(title, message)
+  if (n?.url) {
+    try {
+      fetch(n.url, { method: "POST", headers: { "Content-Type": "text/plain" }, body: `${title}\n${message}`, signal: AbortSignal.timeout(5000) }).catch(() => {})
+    } catch { /* 推送失败不影响主流程 */ }
+  }
+}
+// T93 长任务模式：开关存在会话 meta（meta.longTask）里，Web 与 TUI 读写同一份。
+// 原来是 gateway 内存 Set + 一份没人读的 config.longTask —— 两处来源，且重启即失效。
 const taskRunning = new Set<string>()
 async function runDaemonTask(t: DaemonTask): Promise<void> {
   taskRunning.add(t.name)
@@ -221,13 +308,14 @@ async function runDaemonTask(t: DaemonTask): Promise<void> {
       signal: AbortSignal.timeout(t.timeoutMs ?? agentConfig.taskTimeoutMs ?? 600_000),
     })
     const rec: TaskRunRec = { ok: true, ts: Date.now(), durationMs: Date.now() - t0, report: r.text.slice(0, 2000) }
-    fs.appendFileSync(path.join(LOGS_DIR, "history.jsonl"), JSON.stringify({ ts: new Date().toISOString(), task: t.name, ok: true, steps: r.steps, durationMs: rec.durationMs, report: rec.report }) + "\n")
-    toast(`Yy Sustainer · ${t.name}`, `任务完成（${r.steps} 步）：${r.text.slice(0, 60)}`)
+    appendLogLine(path.join(LOGS_DIR, "history.jsonl"), JSON.stringify({ ts: new Date().toISOString(), task: t.name, ok: true, steps: r.steps, durationMs: rec.durationMs, report: rec.report }) + "\n")
+    // T85：定时任务完成走统一通知（toast + 可选 webhook 推送）
+    notifyDone(`Yy Sustainer · ${t.name}`, `任务完成（${r.steps} 步）：${r.text.slice(0, 60)}`)
     broadcast({ type: "notice", text: `✅ 任务「${t.name}」完成（${r.steps} 步）` })
   } catch (e) {
     const msg = (e as Error).message
-    fs.appendFileSync(path.join(LOGS_DIR, "history.jsonl"), JSON.stringify({ ts: new Date().toISOString(), task: t.name, ok: false, durationMs: Date.now() - t0, error: msg }) + "\n")
-    toast(`Yy Sustainer · ${t.name} 失败`, msg.slice(0, 80))
+    appendLogLine(path.join(LOGS_DIR, "history.jsonl"), JSON.stringify({ ts: new Date().toISOString(), task: t.name, ok: false, durationMs: Date.now() - t0, error: msg }) + "\n")
+    notifyDone(`Yy Sustainer · ${t.name} 失败`, msg.slice(0, 80))
     broadcast({ type: "notice", text: `❌ 任务「${t.name}」失败：${msg.slice(0, 60)}` })
   } finally {
     taskRunning.delete(t.name)
@@ -239,22 +327,36 @@ async function runDaemonTask(t: DaemonTask): Promise<void> {
 
 // ---- 核心：跑一个流式任务（对齐 TUI send() 语义：重试、步骤、落盘、错误消息） ----
 async function runTurn(sessionId: string, text: string, imagesBase64?: string[], imagesDataUrl?: string[]): Promise<void> {
+  const t0turn = Date.now() // T85：完成通知只发「耗时较长」的回合，避免每轮骚扰
   const file = loadSession(sessionId)
   if (!file) {
     broadcast({ type: "error", message: `会话不存在: ${sessionId}` })
     return
   }
-  const { meta, messages } = file
-  const model = sessionsModelOverride.get(sessionId) ?? meta.model ?? loadConfig().model
+  const { meta } = file
+  // T93 P3 预算熔断·前置：已经超限就**一个 token 都不花**，直接拒绝。
+  // 放在最前面——后面每一步都要花钱，等它跑起来再拦就晚了。
+  const budgetCap = loadConfig().sessionTokenBudget ?? 0
+  if (budgetCap > 0 && sessionTokensUsed(meta.usage) >= budgetCap) {
+    const used = sessionTokensUsed(meta.usage)
+    broadcast({ type: "error", sessionId, message: budgetExceededNotice(used, budgetCap, "before") })
+    broadcast({ type: "notice", sessionId, text: `已达本会话 token 预算（${used.toLocaleString()}/${budgetCap.toLocaleString()}）` })
+    return
+  }
+  // T93 P3：压缩恢复要换掉历史，所以这三者不能是 const
+  let messages = file.messages
+  // T79：let——思考失败/不可重试错误时可降级到 fallbackModel 再试一次（原 const 无法换模型）
+  let model = sessionsModelOverride.get(sessionId) ?? meta.model ?? loadConfig().model
 
   // 附件：图片直传（视觉模型）；base64 由客户端给，文本附件已在客户端拼进 text
-  const history = toCoreMessages(messages)
+  let history = toCoreMessages(messages)
   // 落库用可读文本（[IMG:n] 内部标记 → [图片n] 占位，前端渲染成图片小气泡）；
   // 发给引擎的 text 保留标记供 prepare() 解析图文顺序。images 存 dataUrl 供气泡显示。
   const displayText = text.replace(/\[IMG:(\d+)\]/g, (_, i) => `[图片${Number(i) + 1}]`).replace(/[ \t]+/g, " ").trim()
   const userMsg: StoredMessage = { role: "user", content: displayText, ts: Date.now() }
-  if (imagesDataUrl?.length) userMsg.images = imagesDataUrl
-  const msgsAfterUser = [...messages, userMsg]
+  // T92：外置落盘（内容寻址，同图只存一份）；任何一张失败就保留那张的 dataUrl，不丢图
+  if (imagesDataUrl?.length) userMsg.images = externalizeImages(sessionId, imagesDataUrl)
+  let msgsAfterUser = [...messages, userMsg]
   if (meta.title === "新对话" && text) meta.title = displayText.replace(/\s+/g, " ").slice(0, 30)
   meta.updatedAt = Date.now()
   persist(meta, msgsAfterUser)
@@ -269,12 +371,104 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
 
   const ac = new AbortController()
   sessionAborts.set(sessionId, ac)
+  // T93 P2 交互轮总超时：`taskTimeoutMs` 只管 CLI/定时任务/daemon，这条路径原来一个超时都没有。
+  // 默认 0 = 不限（交互场景用户自己能点停止，不该替他决定）。
+  // 超时后**复用既有的停止路径**落库（aborted=true → 落 streamedText + 步骤），不新增错误分支。
+  const interactiveTimeoutMs = loadConfig().interactiveTimeoutMs ?? 0
+  let timedOut = false
+  /** T93 P2：超时/停止时落库的正文。abort 会让 runAgentStream 早返回空 text，
+   *  所以**超时也会走到成功分支**——这里必须自己区分，否则落成的永远是「（已停止）」 */
+  const stopOrTimeoutContent = (): string => {
+    const text = (r?.text || streamedText || "").trim()
+    // T93 P3：预算熔断也要和「用户主动停止」分开——都写「已停止」会让人以为是自己点了停止
+    if (budgetStopped) {
+      return text
+        ? `${text}\n\n---\n（已达到本会话 token 预算而停止，以上是熔断前已产出的部分；已执行的步骤见下）`
+        : "（已达到本会话 token 预算而停止，未输出内容。已执行的步骤见下，可在此基础上继续。）"
+    }
+    if (timedOut) {
+      return text
+        ? `${text}\n\n---\n（已超时停止，以上是超时前已产出的部分；已执行的步骤见下）`
+        : "（已超时停止，未输出内容。已执行的步骤见下，可在此基础上继续。）"
+    }
+    return text || "（已停止，未输出内容）"
+  }
+  const turnTimeout =
+    interactiveTimeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true
+          broadcast({ type: "status", sessionId, text: `已超时（${Math.round(interactiveTimeoutMs / 1000)} 秒），正在收尾` })
+          ac.abort(new Error(`interactive-timeout:${interactiveTimeoutMs}`))
+        }, interactiveTimeoutMs)
+      : undefined
   const steps: Array<{ name: string; argsSummary: string; input?: string; output?: string }> = []
   // 停止后可见：累积流式已吐出的正文——abort 时 result.text 拿不到（Promise 被 reject），只能自己攒
   let streamedText = ""
+  // T93 P1 轮内 checkpoint：原来一个回合只在开头和结尾落库，中途被进程杀掉
+  // 就只剩一条用户消息、什么都找不回来。现在每 20 秒或每 5 步把一个 checkpoint 写到
+  // 独立目录（含已流出正文、工具步骤、本轮压缩结果）。**起始就写一次**，
+  // 否则「刚发起就被杀」仍然无迹可寻。
+  let compactedThisTurn: CheckpointMessage[] | undefined
+  /** T93 P3：本轮是否已因上下文超限而强制压缩过。只给一次机会——压完还超限就明说，
+   *  不擅自改全局 config.contextTokens（用户数据不擅自处理），也不能无限重试。 */
+  let ctxCompacted = false
+  /** T93 P2：轮内观测到的最大真实输入 token（每步的 step.usage.inputTokens），用于实时上下文占用 */
+  let liveCtxTokens = 0
+  /** T93 P3：本轮已真实消耗的 token（每步累加）。中止/超时/熔断时 result.usage 是 0，
+   *  不自己累计就永远记不进账——那一轮的银子白花了却看不到。 */
+  let turnTokens = { in: 0, out: 0 }
+  /** T93 P3：预算熔断是否已触发过。只停一次，停完就走既有的停止落库路径。 */
+  let budgetStopped = false
+  let cpSteps = 0
+  let cpLastMs = 0
+  const writeCp = (): void => {
+    cpLastMs = Date.now()
+    cpSteps = 0
+    saveCheckpoint({
+      sessionId,
+      title: meta.title,
+      cwd: meta.cwd,
+      userTs: userMsg.ts,
+      userText: text.trim(),
+      images: imagesBase64?.length ?? 0,
+      startedAt: t0turn,
+      updatedAt: Date.now(),
+      streamedText,
+      steps,
+      compactedStored: compactedThisTurn,
+      model,
+    })
+  }
+  cpLastMs = Date.now()
+  writeCp()
+  const cpTimer = setInterval(() => {
+    if (Date.now() - cpLastMs < CHECKPOINT_MIN_GAP_MS) return
+    writeCp()
+  }, CHECKPOINT_EVERY_MS)
 
   let r: AgentResult | null = null
   let aborted = false // 用户主动停止 → 不触发监工质检
+  let usedFallback = false // T69：备用模型只用一次，不链式降级
+  // MCP 按需加载（白皮书 10.29）：本回合要不要带 35 个浏览器工具，**在这里算一次**，
+  // envScan 文案与 loop 的工具面共用这个判定（同一个纯函数、同一份输入，不会漂）。
+  const mcpDecision = resolveMcpLoading(text, meta.mcpOn)
+  // T93 P3 的姊妹缺口（2026-09-22 真模型长任务实测抓到）：成功路径用轮内累计记账，
+  // 但**出错/中断路径原来直接 persist**——上游超时、HTTP 失败烧掉的真 token 不进
+  // meta.usage 也不进账本：会话预算熔断看不见它，账本与会话累计对不上，用量页少算。
+  // 实测：18 个工具调用后 Headers Timeout，usage 显示 0/0。turnTokens 是轮内按步累计的
+  // 真实值，成功/失败路径都必须落（cached 出错路径拿不到，两边同填 0 保 check-t45 不变式）。
+  const accountErroredTurn = (): void => {
+    if (!turnTokens.in && !turnTokens.out) return
+    const u = meta.usage ?? { in: 0, out: 0, cached: 0, turns: 0, steps: 0 }
+    meta.usage = {
+      in: u.in + turnTokens.in,
+      out: u.out + turnTokens.out,
+      cached: u.cached,
+      turns: u.turns + 1,
+      steps: u.steps + steps.length,
+    }
+    appendUsage({ ts: Date.now(), sessionId, model, in: turnTokens.in, out: turnTokens.out, cached: 0, steps: steps.length })
+  }
   try {
     // 注意：重试计数只在 catch 里自增（原来 for 头的 attempt++ 会和 catch 里的重复自增，
     // 导致计数跳 1/3/5/7/9，实际只能重发 6 次却显示到 10——顺手修掉）
@@ -290,7 +484,20 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
             signal: ac.signal,
             images: imagesBase64?.length ? imagesBase64 : undefined,
             sessionId,
-            systemSuffix: [envScanPrompt(meta.cwd), feedbackPrompt(messages)].filter(Boolean).join("\n\n"),
+            // T93 P3：todo 清单也注入——todo_write 只有写没有读，模型跑几十步后就再也
+            // 读不回自己定过的计划（记忆已被压缩），这是长任务跑偏最直接的根源
+            // MCP 未加载时 envScan 不能说「有浏览器工具」——文案与真实工具面必须一致
+            systemSuffix: [envScanPrompt(meta.cwd, mcpDecision.load), feedbackPrompt(messages), todoPrompt(sessionId)]
+              .filter(Boolean)
+              .join("\n\n"),
+            // T85/T93 长任务模式：收敛阈值放宽到 30 分钟，避免每步数分钟的自动化被 3 分钟收敛误杀。
+            // 开关读会话 meta（持久化），不再读内存 Set。
+            convergeTimeoutMs: meta.longTask ? 30 * 60_000 : undefined,
+            // T93：上一轮真实输入量 → 压缩判定用（只数消息正文会漏掉系统提示与工具定义的开销）
+            lastInputTokens: meta.lastInputTokens,
+            // MCP 浏览器工具会话级手动开关：undefined = 按意图自动（loop 用同一个
+            // resolveMcpLoading 判，与上面的 mcpDecision 同源）
+            mcpOn: meta.mcpOn,
           },
           {
             onText: (d) => {
@@ -298,6 +505,35 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
               broadcast({ type: "text", sessionId, delta: d })
             },
             onStatus: (s) => broadcast({ type: "status", sessionId, text: s }),
+            // T93 P2：接上每步回调——loop 一直在报，但从来没人接，所以界面上没有「第 N/M 步」。
+            // ctxPct 用**真实输入 token**（step.usage.inputTokens，含系统提示与工具定义）算，
+            // 不是估算；每 5 步播一次，避免把 WS 打满。
+            onStep: ({ step, maxSteps, tools, inputTokens, outputTokens }) => {
+              turnTokens.in += inputTokens
+              turnTokens.out += outputTokens
+              if (inputTokens > liveCtxTokens) liveCtxTokens = inputTokens
+              // T93 P3 预算熔断·轮内：超限就停。走 abort 让 runAgentStream 早返回，
+              // 于是复用既有的「停止」落库路径（保住已流出的正文与步骤），不新增错误分支。
+              if (budgetCap > 0 && !budgetStopped && sessionTokensUsed(meta.usage) + turnTokens.in + turnTokens.out >= budgetCap) {
+                budgetStopped = true
+                const used = sessionTokensUsed(meta.usage) + turnTokens.in + turnTokens.out
+                broadcast({ type: "notice", sessionId, text: budgetExceededNotice(used, budgetCap, "during") })
+                ac.abort(new Error(`budget-exceeded:${budgetCap}`))
+                return
+              }
+              const text = `第 ${step}/${maxSteps} 步${tools.length ? ` · ${tools.join(",")}` : ""}`
+              broadcast({
+                type: "status",
+                sessionId,
+                text,
+                step,
+                maxSteps,
+                // 真实输入量也播出去——probe-real-long-task 的「每步输入 token」靠它
+                // 量固定开销基线（首步 = 系统提示 + 工具定义 + 用户消息）。
+                inputTokens,
+                ...(liveCtxTokens > 0 ? { ctxPct: pctFromTokens(liveCtxTokens) } : {}),
+              })
+            },
             // R1：压缩过程可见——开始广播「压缩中」，完成广播「压缩完成 N 条 → M 条」
             onCompact: (phase, info) =>
               broadcast({
@@ -305,6 +541,11 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
                 sessionId,
                 text: phase === "start" ? "压缩中：整理历史上下文…" : `压缩完成：${info?.before ?? "?"} 条 → ${info?.after ?? "?"} 条`,
               }),
+            // T93 P1：压缩一旦发生就交给 checkpoint 带上——否则中断恢复后这一轮的压缩成果没了，
+            // 采纳时下轮还得从全量重压
+            onCompactedStored: (stored) => {
+              compactedThisTurn = stored.map((m) => ({ role: m.role, content: m.content, ts: m.ts }))
+            },
             onToolEvent: (ev) => {
               if (ev.type === "call") {
                 const input = ev.input ? JSON.stringify(ev.input, null, 2).slice(0, 3000) : undefined
@@ -327,6 +568,11 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
                 if (i >= 0) steps[i] = { ...steps[i], output }
               }
               broadcast({ type: "tool", sessionId, kind: ev.type, toolCallId: ev.toolCallId, name: ev.name, input: ev.input, output: ev.output })
+              // T93 P1：一步工具出了结果就落一次（够 5 步或过了最小间隔才真写）
+              if (ev.type === "result") {
+                cpSteps++
+                if (cpSteps >= CHECKPOINT_EVERY_STEPS && Date.now() - cpLastMs >= CHECKPOINT_MIN_GAP_MS) writeCp()
+              }
             },
           },
         )
@@ -335,6 +581,63 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
         const info = describeFailure(e)
         // 用户主动停止 / 引擎收敛：不重发，直接上抛交给下面统一落库
         if (info.kind === "abort") throw e
+        // T91 幂等护栏：本次失败前已经发起过工具调用 → 可能已经产生副作用（写盘/执行命令/发请求），
+        // 整轮重发会把同一批副作用再放一遍（而且模型看不到上一轮已经做过的事）。
+        // 这种情况不重试、不换模型，把真实原因 + 已执行规模如实抛给用户，由人决定要不要重发。
+        const executed = Number((e as { executedToolCalls?: number })?.executedToolCalls ?? 0)
+        if (executed > 0) {
+          throw new Error(
+            `${info.message}（本次已发起 ${executed} 个工具调用，为避免重复副作用不再自动重发；请先检查产物，再决定是否重新发送）`,
+          )
+        }
+        // T93 P3 上下文超长自动恢复。**必须排在幂等护栏之后**——
+        // 工具结果把上下文顶爆时 executed > 0，此时整轮重发会把工具再跑一遍（重复副作用）。
+        // 那种情况只能带上可操作的病因失败，由人决定。
+        // 而最常见的死法（contextTokens 拍大了 → 第一个请求就超限）executed 必然是 0，
+        // 正好落在这里：强制压缩一次再重试，任务就能接着跑完。
+        if (isContextOverflow(e)) {
+          if (ctxCompacted) throw new Error(contextOverflowHint(loadConfig().contextTokens ?? 131_072, true))
+          ctxCompacted = true
+          try {
+            // system 消息（模型切换提示等）只入库展示、绝不进 LLM 上下文——
+            // 和 toCoreMessages 同一套过滤，别把提示词当成可压缩历史
+            const compactable = messages
+              .filter((m) => m.role !== "system" && m.content.trim())
+              .map((m) => ({ role: m.role === "assistant" ? ("assistant" as const) : ("user" as const), content: m.content, ts: m.ts }))
+            const compacted = await compactNow(compactable, model)
+            if (compacted.length && compacted.length < messages.length) {
+              // 落盘 + 换历史，让这一轮（以及后续轮）都用压缩后的版本
+              persist(meta, compacted)
+              messages = compacted
+              msgsAfterUser = [...compacted, userMsg]
+              history = toCoreMessages(compacted)
+              meta.ctxPct = calcCtxPct(compacted)
+              broadcast({ type: "compacted", sessionId, ctxPct: meta.ctxPct })
+              broadcast({
+                type: "status",
+                sessionId,
+                text: `上下文超限，已自动压缩历史（${compactable.length} → ${compacted.length} 条）后重试`,
+              })
+              continue
+            }
+          } catch {
+            /* 压缩失败就按普通错误往下走，不叠加故障 */
+          }
+          throw new Error(contextOverflowHint(loadConfig().contextTokens ?? 131_072, true))
+        }
+        // T79：模型自动降级——重试预算耗尽或属于不可重试错误（鉴权/欠费/模型不存在等）时，
+        // 若配置了 fallbackModel 且不同于当前模型，换它整体重来一次（仅一次，不链式降级）。
+        // 这正是 mimo 返回 null、服务商 402/404 这类"换模型就能活"场景的兜底。
+        const fb = loadConfig().fallbackModel
+        const budgetNow = retryBudget(info.kind)
+        if (!usedFallback && fb && fb !== model && (budgetNow === 0 || attempt >= budgetNow)) {
+          usedFallback = true
+          model = fb
+          attempt = 0
+          broadcast({ type: "retry", sessionId, attempt: 1, maxRetry: 1, info: `⚠ 正在切换备用模型 ${fb} 重试…`, waitMs: 800 })
+          await new Promise((res) => setTimeout(res, 800))
+          continue
+        }
         attempt++
         // T74：不再用 /rate/ 猜限流——"gene·rate·d" 正好命中它，导致 401/402/404 这类
         // 绝不该重试的错误被白重发 10 次、每次还等十几秒，用户干等到天荒地老。
@@ -347,14 +650,30 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
         await new Promise((res) => setTimeout(res, waitMs))
       }
     }
-    const pct = calcCtxPct([...msgsAfterUser, { content: r?.text ?? "" }])
+    // T93：本轮若发生过上下文压缩，落库历史改用「滚动摘要 + 保留的最近消息」——
+    // 原来落的是原始 msgsAfterUser，压缩结果每轮都被扔掉、下轮从全量重压（成本 O(n²)）。
+    const baseMsgs = r?.compactedStored ?? msgsAfterUser
+    // T93 组合探针抓到的真 bug：**工具调用与工具结果从不落库**，所以 calcCtxPct 只数得到
+    // 「用户消息 + 助手回复」那几十个 token——一个 35 步、186k token 的长回合跑完，
+    // ctxPct 显示 0%。红绿灯于是永远绿着，用户根本看不到上下文要吃紧。
+    // 修法：有真实用量就用真实用量（轮内观测到的最大 step.usage.inputTokens），
+    // 它含系统提示、工具定义、消息框架和全部工具结果——那才是引擎真正收到的 prompt。
+    const pct = liveCtxTokens > 0 ? pctFromTokens(liveCtxTokens) : calcCtxPct([...baseMsgs, { content: r?.text ?? "" }])
     meta.ctxPct = pct
     meta.updatedAt = Date.now()
+    // T93：记下本轮真实输入量，供下一轮压缩判定做下限。
+    // 注意：这个值**回合结束才写**——回合中途的上下文增长它看不到。那部分已由回合内
+    // 压缩接手（prepareStep 每步用上一步真实 inputTokens 判定，见白皮书 10.28）。
+    if (r?.usage?.in) meta.lastInputTokens = r.usage.in
     // token 消耗累计（deepseek 风格：输入/输出/缓存命中 + 轮数/步数），随 meta 落库
+    // T93 P3：用**轮内累计**而不是 r.usage——中止/超时/预算熔断时 r.usage 全是 0，
+    // 那一轮真实花掉的 token 会凭空消失（预算就永远拦不住，账本也对不上）。
     const u = meta.usage ?? { in: 0, out: 0, cached: 0, turns: 0, steps: 0 }
+    const turnIn = turnTokens.in || r?.usage?.in || 0
+    const turnOut = turnTokens.out || r?.usage?.out || 0
     meta.usage = {
-      in: u.in + (r?.usage?.in ?? 0),
-      out: u.out + (r?.usage?.out ?? 0),
+      in: u.in + turnIn,
+      out: u.out + turnOut,
       cached: u.cached + (r?.usage?.cached ?? 0),
       turns: u.turns + 1,
       steps: u.steps + (r?.steps ?? 0),
@@ -365,15 +684,17 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
       ts: Date.now(),
       sessionId,
       model: r?.model ?? model ?? "（未知模型）",
-      in: r?.usage?.in ?? 0,
-      out: r?.usage?.out ?? 0,
+      // 与 meta.usage 同一份数——账本和会话累计必须对得上（check-t45 守这条不变量）
+      in: turnIn,
+      out: turnOut,
       cached: r?.usage?.cached ?? 0,
       steps: r?.steps ?? 0,
     })
     const assistantMsg: StoredMessage = {
       role: "assistant",
       // abort 早返回时 r.text 为空——用 streamedText 兜底（用户已看到的流式正文不能丢）
-      content: (r?.text || streamedText || "").trim() || "（已停止，未输出内容）",
+      // T93 P2：超时要和「用户主动停止」区分开——都写「已停止」会让人以为是自己点了停止
+      content: stopOrTimeoutContent(),
       ts: Date.now(),
       model: r?.model ?? model,
       steps: steps.map((s) => ({ ...s })),
@@ -387,13 +708,32 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
       per.set(assistantMsg.ts, fileEdits)
       while (per.size > 10) per.delete(Math.min(...per.keys()))
       undoSnapshots.set(sessionId, per)
+      // T93 B2：快照落盘（默认关）。关的时候这里什么都不做，行为与今天完全一致。
+      saveUndoTurn(sessionId, assistantMsg.ts, meta.cwd, fileEdits)
     }
-    const finalMsgs = [...msgsAfterUser, assistantMsg]
+    const finalMsgs = [...baseMsgs, assistantMsg]
     persist(meta, finalMsgs)
+    // T93：压缩替换了落库历史，通知前端重新拉取，否则界面还挂着已经不存在的老消息
+    if (r?.compactedStored) broadcast({ type: "compacted", sessionId, ctxPct: pct })
     broadcast({ type: "message", sessionId, message: assistantMsg, ctxPct: pct, usage: meta.usage })
+    // T93 P2：超时也会走到这里（abort 让 runAgentStream 早返回空 text），补一条明确提示
+    if (timedOut) {
+      broadcast({
+        type: "notice",
+        sessionId,
+        text: `已超时停止（上限 ${Math.round(interactiveTimeoutMs / 1000)} 秒）——已保留已流出的正文与步骤，可在此基础上继续。`,
+      })
+    }
+    // T85 完成通知：耗时 ≥30s 或长任务模式的回合才提醒（普通快问快答不打扰）
+    const durTurn = Date.now() - t0turn
+    if (!timedOut && (durTurn >= 30_000 || meta.longTask)) {
+      notifyDone("Yy Sustainer · 任务完成", `「${meta.title.slice(0, 24)}」本轮完成（${Math.round(durTurn / 1000)}s，${assistantMsg.steps?.length ?? 0} 步）`)
+    }
   } catch (e) {
     const err = e as Error
     const dinfo = describeFailure(e)
+    // 出错/中断路径也要记账（见 accountErroredTurn 注释里的实测案例）
+    accountErroredTurn()
     // T74：判「是否用户主动停止」不再靠 message 里有没有 "abort"/"No output generated"。
     // 现在真实错误会带着真是原因上来（HTTP 401 / 余额不足 / 连接被拒绝…），
     // 再拿文案去猜，就会把「key 错了」也当「已停止」静默吞掉。
@@ -401,7 +741,12 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
     if (!aborted) {
       // T66：上游一张口都没开（没有状态码、没有根因、也没有任何已流出内容）——
       // 给它一句人话，而不是把 AI SDK 的英文抛栈甩给用户
-      const silent = dinfo.kind === "unknown" && !streamedText.trim() && !steps.length
+      // T93 P3：`silent` 会把「没有输出 + 没有步骤」的未知错误统一改写成
+      // 「模型没有返回任何内容」。但它**不能吃掉我们已经有准确病因的错误**——
+      // 上下文超限的提示就是这么被吞掉的（第一版实测：恢复跑了、压缩没成功、
+      // 提示却被替换成一句「模型没有返回任何内容」，用户还是不知道该干什么）。
+      const silent =
+        dinfo.kind === "unknown" && !streamedText.trim() && !steps.length && !ctxCompacted
       // T74：若是「吐了一半才崩」，已流出的正文只存在于即将被销毁的流式气泡里，
       // 不带上就等于白等一场——所以把半截正文一起落库，后面跟真实原因。
       const partial = streamedText.trim()
@@ -411,25 +756,43 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
           ? `${partial}\n\n---\n[出错] 输出中断：${err.message}`
           : `[出错] ${err.message}`
       const errMsg: StoredMessage = { role: "assistant", content, ts: Date.now(), model }
-      persist(meta, [...msgsAfterUser, errMsg])
+      // T93：本轮已发生过的压缩结果照落——否则这一轮的压缩白做，下轮还得从全量重压
+      persist(meta, [...(r?.compactedStored ?? msgsAfterUser), errMsg])
       broadcast({ type: "message", sessionId, message: errMsg })
       broadcast({ type: "error", sessionId, message: err.message })
+      notifyDone("Yy Sustainer · 任务出错", `「${meta.title.slice(0, 24)}」：${err.message.slice(0, 100)}`) // T85
       takeFileEdits(sessionId) // 出错丢弃快照（abort 也走这里）
     } else {
-      broadcast({ type: "notice", sessionId, text: "已停止" })
+      // T93 P3：熔断/超时/用户停止三种都要说清是哪一种——「已停止」会让人以为是自己点了停止
+      broadcast({
+        type: "notice",
+        sessionId,
+        text: budgetStopped
+          ? `已达本会话 token 预算（${sessionTokensUsed(meta.usage).toLocaleString()}/${budgetCap.toLocaleString()}），已停止`
+          : timedOut
+            ? `已超时停止（上限 ${Math.round(interactiveTimeoutMs / 1000)} 秒）`
+            : "已停止",
+      })
       // 停止也落库：已流出的正文 + 已执行的工具步骤都保留（原来正文丢失只剩「（已停止）」，纯思考无步骤时甚至整条不落库）
+      // T93 P2：超时和用户主动停止都要说清是哪一种——「已停止」会让人以为是自己点了停止
       const stopText = (r?.text || streamedText || "").trim()
       const stopMsg: StoredMessage = {
         role: "assistant",
-        content: stopText || "（已停止，未输出内容）",
+        content: stopText || (timedOut ? "（已超时，未输出内容）" : "（已停止，未输出内容）"),
         ts: Date.now(),
         model,
         steps: steps.map((s) => ({ ...s })),
       }
-      persist(meta, [...msgsAfterUser, stopMsg])
+      persist(meta, [...(r?.compactedStored ?? msgsAfterUser), stopMsg])
       broadcast({ type: "message", sessionId, message: stopMsg, ctxPct: meta.ctxPct, usage: meta.usage })
     }
   } finally {
+    // T93 P1：回合已收尾（有结果 / 出错 / 用户停止都算收尾）→ 这一轮的 checkpoint 没用了
+    clearInterval(cpTimer)
+    clearCheckpoint(sessionId)
+    // T93 P2：超时定时器必须清——否则进程里会留一个已失效的 handle，且 abort 已发出的
+    // controller 还会被 sessionAborts 之外的东西持有
+    if (turnTimeout) clearTimeout(turnTimeout)
     // R4 会话独立：只清理本会话的状态，其他会话照常跑
     sessionBusy.delete(sessionId)
     sessionAborts.delete(sessionId)
@@ -531,42 +894,40 @@ function detectPythonEnv(): string {
   return text
 }
 
-function envScanPrompt(cwd?: string): string {
+/**
+ * 工作环境扫描段。`mcpActive` = 本轮 MCP 工具是否真的加载（白皮书 10.29 按需加载）——
+ * 文案必须与真实工具面一致：没加载却广告「有浏览器工具」，模型会去调不存在的工具。
+ * 缓存 key 含 mcpActive：两个同 cwd 会话一个开一个关时不能共用文本。
+ */
+function envScanPrompt(cwd?: string, mcpActive = true): string {
   if (!cwd || !fs.existsSync(cwd)) return ""
-  const cached = envScanCache.get(cwd)
+  const cacheKey = `${cwd}|mcp:${mcpActive ? "on" : "off"}`
+  const cached = envScanCache.get(cacheKey)
   if (cached && Date.now() - cached.at < ENV_SCAN_TTL) return cached.text
   let text = ""
   try {
-    const parent = path.dirname(cwd)
-    const parentName = path.basename(cwd)
-    let parentSiblings = ""
-    try {
-      parentSiblings = fs.readdirSync(parent, { withFileTypes: true })
-        .filter((e) => e.isDirectory() && e.name !== parentName && !/^(node_modules|\.git|\..*)$/.test(e.name))
-        .slice(0, 15)
-        .map((e) => e.name)
-        .join("、")
-    } catch { /* ignore */ }
-    const child = scanDirSummary(cwd, 1, 30)
     const cfg = loadConfig()
     const mcpNames = Object.keys(cfg.mcpServers ?? {})
     const mcpDesc = mcpNames.length
-      ? mcpNames.map((n) => `mcp_${n}_*`).join("、") + "（含浏览器自动化：导航/点击/填表/截图/画面操控）"
+      ? mcpActive
+        ? mcpNames.map((n) => `mcp_${n}_*`).join("、") + "（含浏览器自动化：导航/点击/填表/截图/画面操控）"
+        // 未加载时说清两件事：有这套能力 + 怎么用上（模型按礼仪转告用户）
+        : "已配备浏览器自动化（导航/点击/填表/截图）但本轮未启用——用户消息提到浏览器/网页/网址/链接等时会自动启用；需要现在用可让用户开启"
       : "（未配置——可在设置里添加 MCP server）"
     text = [
       "【工作环境扫描】（系统已自动扫描，直接利用，不必重复探索）：",
-      `- 当前工作区：${cwd}`,
+      // bash 走 PowerShell 这条平台事实不在工具 schema 里，必须在这里说（原来混在
+      // 「可用工具路径」长行里，那行与请求里的工具定义整体重复，已删）
+      `- 当前工作区：${cwd}（bash 工具在本机走 PowerShell）`,
       `- Python 环境：${detectPythonEnv()}`,
-      `- 父目录 ${parent} 下的其他项目/文件夹：${parentSiblings || "（无）"}`,
       "- 当前工作区结构（一层展开，目录下带一层子项）：",
-      child,
-      "- 可用工具路径：bash（PowerShell）、read/write/edit（文件读写）、glob/grep（检索）、websearch/webfetch（联网）、memory_save/memory_search/memory_read（记忆分层）、todo_write、delegate（子代理）、db_save/db_query（结构化库）、xlsx/docx/imggen/videogen（文档图像视频）、task_create 等（定时自动化）",
+      scanDirSummary(cwd, 1, 30),
       `- MCP 服务工具：${mcpDesc}`,
       "- 记忆库：memory_search 可查公共记忆库（用户习惯、历史结论）；本会话的对话与需求即会话记忆，不要与其他会话混淆",
       "- **路径纪律**：上面扫描出的文件路径必须严格遵守——引用/读写文件一律用扫描出的真实路径，绝不臆造或改写路径；扫描没列出的文件先 glob/grep 确认存在再操作",
     ].join("\n")
   } catch { /* 扫描失败不影响对话 */ }
-  envScanCache.set(cwd, { at: Date.now(), text })
+  envScanCache.set(cacheKey, { at: Date.now(), text })
   return text
 }
 
@@ -753,7 +1114,8 @@ async function trySplitMultiProject(text: string, sourceSessionId?: string): Pro
         `规则：1) 只拆「确实要分别在不同项目里执行」的独立任务；跨项目的关联部分归入最相关的那个子任务说明里；2) 每个子任务一段自包含的清晰指令（不引用其他子任务的上下文）；3) 拆不出 ≥2 个独立子任务、或诉求不属于任何已知项目时，输出 {"tasks":[]}；4) 只输出 JSON：{"tasks":[{"cwd":"完整路径","task":"子任务指令"}]}`,
         // T73：拆分器同样注入基础层（无例外）；「只输出 JSON」的契约靠 composeSystem 的作用域声明
         // （基础层格式条款让位于专用指令）+ 下方解析侧容错（剥 thinking、取最后一个 JSON 块）双重保障。
-        { maxSteps: 1, disableInjection: true, system: "你是任务拆分器。只输出 JSON，不要输出任何其他内容。", model: cfg.splitterModel || cfg.model, signal: ac.signal },
+        // T91：拆分器是内部单一职责调用 → 精简基础层（完整层 ≈ 11k tokens，一次拆 JSON 不值得付）
+        { maxSteps: 1, disableInjection: true, compactBase: true, system: "你是任务拆分器。只输出 JSON，不要输出任何其他内容。", model: cfg.splitterModel || cfg.model, signal: ac.signal },
       )
     } finally {
       clearTimeout(timer)
@@ -930,6 +1292,12 @@ function statePayload(): Record<string, unknown> {
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
   const m = req.method ?? "GET"
   const p = url.pathname
+  // T80 配对端点：仅本机可达（外层闸门已排除它，这里双保险）；返回 token 供前端自动携带
+  if (m === "GET" && p === "/api/pair") {
+    if (!isLocalReq(req)) return json(res, 403, { error: "pair 仅限本机" })
+    // T92：顺带告知监听范围——前端复制分享链接时据此提示「当前仅本机可访问」
+    return json(res, 200, { token: authToken, host: HOST, lan: LAN_SHARE })
+  }
   if (m === "GET" && p === "/api/sessions") return json(res, 200, listSessions())
   // T45 使用统计两张图的数据源（只读）：都从 ~/.yyagent/usage.jsonl 现算，零额外落盘
   if (m === "GET" && p === "/api/usage/daily") return json(res, 200, usageDaily())
@@ -1097,7 +1465,129 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       return json(res, 400, { error: `无法读取目录: ${(e as Error).message}` })
     }
   }
-  let mt = p.match(/^\/api\/sessions\/([\w-]+)$/)
+  // T93 P1 断点恢复：这两条是**字面路径**，必须排在下面 `/^\/api\/sessions\/([\w-]+)$/`
+  // 之前——否则 "checkpoints" 会被当成会话 id，请求悄悄落到「查一个不存在的会话」上。
+  if (m === "GET" && p === "/api/sessions/checkpoints") {
+    return json(res, 200, {
+      checkpoints: listCheckpoints().map((c) => ({
+        sessionId: c.sessionId,
+        title: c.title,
+        cwd: c.cwd,
+        userTs: c.userTs,
+        startedAt: c.startedAt,
+        updatedAt: c.updatedAt,
+        streamedChars: c.streamedText.trim().length,
+        steps: c.steps.length,
+        images: c.images,
+        stale: Date.now() - c.updatedAt > 24 * 3600_000,
+        summary: describeCheckpoint(c),
+      })),
+    })
+  }
+  if (m === "POST" && p === "/api/sessions/checkpoints/resume") {
+    const body = JSON.parse((await readBody(req)) || "{}")
+    const sid = String(body.sessionId ?? "")
+    const action = String(body.action ?? "")
+    const c = loadCheckpoint(sid)
+    if (!c) return json(res, 404, { error: "这个会话没有未完成的回合" })
+    const file = loadSession(sid)
+    if (!file) {
+      clearCheckpoint(sid)
+      return json(res, 200, { ok: true, action: "cleared", text: "会话已不存在，残留的 checkpoint 已清理" })
+    }
+    // 双完成的护栏：会话里已经有比本轮用户消息更新的助手回复 → 这一轮其实跑完了，
+    // checkpoint 只是没来得及被 finally 清掉。三个动作都必须先过这道关：
+    //   adopt  会追加一条重复回复
+    //   discard 会连着一段**真实完成**的历史一起删掉
+    //   retry  会把同样的请求再发一遍
+    if (file.messages.some((mm) => mm.role === "assistant" && mm.ts > c.userTs)) {
+      clearCheckpoint(sid)
+      return json(res, 200, {
+        ok: true,
+        action: "already-done",
+        text:
+          "这一轮其实已经有完整的助手回复（checkpoint 只是没来得及清掉），已清理残留、没有改动会话。" +
+          "如果你是想撤回这一段，请用撤回功能而不是这里的恢复。",
+      })
+    }
+    if (action === "discard") {
+      const kept = truncateFrom(file.messages, c.userTs)
+      if (kept) persist(file.meta, kept)
+      clearCheckpoint(sid)
+      broadcast({ type: "notice", sessionId: sid, text: "已丢弃这一轮的中断记录" })
+      return json(res, 200, { ok: true, action: "discard", removed: kept ? file.messages.length - kept.length : 0 })
+    }
+    if (action === "adopt") {
+      const idx = file.messages.findIndex((mm) => mm.ts === c.userTs)
+      if (idx < 0) {
+        clearCheckpoint(sid)
+        return json(res, 409, { error: "会话里找不到这一轮的用户消息（可能已被撤回），无法定位" })
+      }
+      const userMsgStored = file.messages[idx]
+      const before = c.compactedStored ?? file.messages.slice(0, idx)
+      const { content } = resumeAssistantContent(c)
+      const am: StoredMessage = {
+        role: "assistant",
+        content,
+        ts: Date.now(),
+        model: c.model,
+        steps: c.steps.map((s) => ({ ...s })),
+      }
+      persist(file.meta, [...before, userMsgStored, am])
+      clearCheckpoint(sid)
+      broadcast({ type: "message", sessionId: sid, message: am })
+      // 若中断轮发生过压缩，落库历史已被替换成「摘要 + 保留消息」——前端不重拉就会挂着
+      // 一份和服务端不一致的旧历史（和正常回合压缩后同一个道理）
+      if (c.compactedStored) {
+        broadcast({ type: "compacted", sessionId: sid, ctxPct: calcCtxPct([...before, userMsgStored, am]) })
+      }
+      return json(res, 200, { ok: true, action: "adopt", message: am })
+    }
+    if (action === "retry") {
+      if (sessionBusy.has(sid)) return json(res, 409, { error: "会话正在跑任务，请先停止" })
+      // 图片不入 checkpoint（base64 能把文件撑到几 MB）——**宁可不可用，不能悄悄丢图**
+      if (c.images > 0) {
+        return json(res, 409, { error: `这一轮带了 ${c.images} 张图片，而图片没有存进 checkpoint。为避免丢图，请手动把原消息重发一次。` })
+      }
+      if (!c.userText.trim()) return json(res, 409, { error: "checkpoint 没保存到用户输入，无法自动重发" })
+      const kept = truncateFrom(file.messages, c.userTs)
+      if (kept) persist(file.meta, kept)
+      clearCheckpoint(sid)
+      void runTurn(sid, c.userText)
+      return json(res, 200, { ok: true, action: "retry", text: "已按原输入重新发起" })
+    }
+    return json(res, 400, { error: `未知 action: ${action}（可用 adopt / retry / discard）` })
+  }
+  // MCP 浏览器工具会话级开关（白皮书 10.29）。嵌套形状与 undo-state 一致：
+  //   GET  → { on: true|false|null }（null = 自动，按用户输入意图判）
+  //   POST → { on: true|false/null }（null = 清除手动设置，回自动）
+  // 为什么按会话而不是 config：手动开一次只影响这个会话；且写进 meta 重启不丢
+  // （config 是全局的，为一个浏览任务给所有会话常开 35 个工具正是要消除的浪费）。
+  // **排在通用 /api/sessions/{id} 之前**——按 checkpoint 路由的教训，字面/带后缀的
+  // 路由一律先判，别去考验通用正则的锚。
+  let mt = p.match(/^\/api\/sessions\/([\w-]+)\/mcp$/)
+  if (mt && m === "GET") {
+    const sid = mt[1]
+    const f = loadSession(sid)
+    if (!f) return json(res, 404, { error: "会话不存在" })
+    return json(res, 200, { sessionId: sid, on: f.meta.mcpOn ?? null })
+  }
+  if (mt && m === "POST") {
+    const body = JSON.parse((await readBody(req)) || "{}")
+    const sid = mt[1]
+    const f = loadSession(sid)
+    if (!f) return json(res, 404, { error: "会话不存在" })
+    const on = body.on
+    if (on === true || on === false) f.meta.mcpOn = on
+    else if (on === null) delete f.meta.mcpOn
+    else return json(res, 400, { error: "on 只能是 true / false / null（null = 回到自动）" })
+    f.meta.updatedAt = Date.now()
+    persist(f.meta, f.messages)
+    const label = f.meta.mcpOn === true ? "已开启（本会话固定加载）" : f.meta.mcpOn === false ? "已关闭（本会话不加载）" : "已回到自动（按意图加载）"
+    broadcast({ type: "notice", text: `浏览器工具${label}` })
+    return json(res, 200, { ok: true, sessionId: sid, on: f.meta.mcpOn ?? null })
+  }
+  mt = p.match(/^\/api\/sessions\/([\w-]+)$/)
   if (mt) {
     const id = mt[1]
     if (m === "GET") {
@@ -1114,6 +1604,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         for (let i = 0; i < 50 && sessionBusy.has(id); i++) await new Promise((r) => setTimeout(r, 100))
       }
       deleteSession(id)
+      removeSessionAttachments(id) // T92：会话删了，它的图片附件目录一并清掉（否则 ~/.yyagent/attachments 只增不减）
       deleteTodo(id) // P2-4：todo 按会话隔离，会话删了清单也跟着删
       assistHistories.delete(id) // 辅助对话按会话隔离：主会话删了，子代理对话一并清理
       sessionQueues.delete(id) // R4：排队消息一并清理
@@ -1164,6 +1655,27 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       broadcast({ type: "status", sessionId: mt[1], text: "" })
       return json(res, 500, { error: String((e as Error).message ?? e) })
     }
+  }
+  // T93 B3 撤销状态：批量返回本会话每一轮「能不能撤销 + 为什么」。
+  // 和 compact/rename 同一个形状（`/api/sessions/{id}/xxx`）——**不要**做成
+  // `/api/sessions/undo-state?sid=`：那种平铺形状和 `/api/longtask` 一样是历史遗留，
+  // 新的按会话子资源一律用嵌套，probe-routes 也更好核。
+  mt = p.match(/^\/api\/sessions\/([\w-]+)\/undo-state$/)
+  if (mt && m === "GET") {
+    const sid = mt[1]
+    const file = loadSession(sid)
+    if (!file) return json(res, 404, { error: "会话不存在" })
+    const per = undoSnapshots.get(sid)
+    const states: Record<string, { canUndo: boolean; source?: "memory" | "disk"; reason?: string }> = {}
+    for (const msg of file.messages) {
+      if (msg.role !== "assistant" || !msg.fileEdits?.length) continue
+      // 复用唯一的恢复出口——不在这里另写一套「按 ts 找快照」
+      const target = resolveUndoTurn(per?.get(msg.ts), sid, msg.ts)
+      states[String(msg.ts)] = target
+        ? { canUndo: target.files.some((f) => f.plan.op !== "refuse"), source: target.source }
+        : { canUndo: false, reason: undoMissReason(true) }
+    }
+    return json(res, 200, { sessionId: sid, states })
   }
   mt = p.match(/^\/api\/sessions\/([\w-]+)\/rename$/)
   if (mt && m === "POST") {
@@ -1434,6 +1946,102 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     cfg.ui = ui
     saveConfig(cfg)
     return json(res, 200, { ok: true, ui })
+  }
+  // T93 长任务模式：读写会话 meta.longTask（持久化）。原来改的是内存 Set，重启就丢
+  if (m === "GET" && p === "/api/longtask") {
+    const f = loadSession(url.searchParams.get("sid") ?? "")
+    return json(res, 200, { on: f?.meta.longTask === true })
+  }
+  if (m === "POST" && p === "/api/longtask") {
+    const body = JSON.parse((await readBody(req)) || "{}")
+    const sid = String(body.sessionId ?? "")
+    if (!sid) return json(res, 400, { error: "sessionId 必填" })
+    const f = loadSession(sid)
+    if (!f) return json(res, 404, { error: "会话不存在" })
+    f.meta.longTask = body.on === true
+    f.meta.updatedAt = Date.now()
+    persist(f.meta, f.messages)
+    return json(res, 200, { ok: true, on: f.meta.longTask })
+  }
+  // T83 自动备份：列表 / 立即执行 / 配置（enabled/keep/intervalHours 写 config.backup）
+  if (m === "GET" && p === "/api/backup") return json(res, 200, { config: loadConfig().backup ?? {}, notify: loadConfig().notify ?? {}, backups: listBackups() })
+  if (m === "POST" && p === "/api/backup/run") {
+    try {
+      const info = await runBackupNow()
+      return json(res, 200, { ok: true, ...info })
+    } catch (e) {
+      return json(res, 500, { error: String((e as Error).message ?? e) })
+    }
+  }
+  if (m === "POST" && p === "/api/backup/config") {
+    const body = JSON.parse((await readBody(req)) || "{}")
+    const cfg = loadConfig()
+    const cur = cfg.backup ?? {}
+    cfg.backup = {
+      enabled: typeof body.enabled === "boolean" ? body.enabled : (cur.enabled ?? true),
+      keep: Math.max(1, Math.min(90, Number(body.keep ?? cur.keep ?? 14))),
+      intervalHours: Math.max(1, Math.min(720, Number(body.intervalHours ?? cur.intervalHours ?? 24))),
+    }
+    saveConfig(cfg)
+    return json(res, 200, { ok: true, config: cfg.backup })
+  }
+  // T85 完成通知配置：toast 开关 + webhook url（ntfy/Server酱等，POST 正文即文本）
+  if (m === "POST" && p === "/api/notify") {
+    const body = JSON.parse((await readBody(req)) || "{}")
+    const cfg = loadConfig()
+    cfg.notify = {
+      toast: typeof body.toast === "boolean" ? body.toast : (cfg.notify?.toast ?? true),
+      url: typeof body.url === "string" ? body.url.trim() : (cfg.notify?.url ?? ""),
+    }
+    saveConfig(cfg)
+    return json(res, 200, { ok: true, notify: cfg.notify })
+  }
+  // T88 沙箱执行配置：GET 返回 Docker 可用性 + 当前配置；POST 写 enabled/image（saveConfig 即时生效）
+  if (m === "GET" && p === "/api/sandbox") {
+    const cfg = loadConfig().sandbox ?? {}
+    const docker = await dockerAvailable()
+    return json(res, 200, { docker, config: { enabled: cfg.enabled ?? false, image: cfg.image ?? "node:22-bookworm" } })
+  }
+  if (m === "POST" && p === "/api/sandbox/config") {
+    const body = JSON.parse((await readBody(req)) || "{}")
+    const cfg = loadConfig()
+    cfg.sandbox = {
+      enabled: typeof body.enabled === "boolean" ? body.enabled : (cfg.sandbox?.enabled ?? false),
+      image: typeof body.image === "string" && body.image.trim() ? body.image.trim() : (cfg.sandbox?.image ?? "node:22-bookworm"),
+    }
+    saveConfig(cfg)
+    return json(res, 200, { ok: true, config: cfg.sandbox })
+  }
+  // T84 项目级命令白名单：按 cwd 管理（GET 查询 / add / remove）
+  // T90：键统一走 allowlistKeyFor —— 兼容历史大写盘符键，且与运行时 commandAllowed 用同一套键
+  if (m === "GET" && p === "/api/allowlist") {
+    const cwd = allowlistKeyFor(url.searchParams.get("cwd") ?? "")
+    return json(res, 200, { prefixes: (loadConfig().allowlists ?? {})[cwd] ?? [] })
+  }
+  if (m === "POST" && p === "/api/allowlist/add") {
+    const body = JSON.parse((await readBody(req)) || "{}")
+    const cwd = allowlistKeyFor(String(body.cwd ?? ""))
+    const prefix = String(body.prefix ?? "").trim().toLowerCase()
+    if (!cwd || !prefix) return json(res, 400, { error: "cwd 与 prefix 必填" })
+    const cfg = loadConfig()
+    const list = cfg.allowlists ?? {}
+    const set = new Set(list[cwd] ?? [])
+    set.add(prefix)
+    cfg.allowlists = { ...list, [cwd]: [...set] }
+    saveConfig(cfg)
+    return json(res, 200, { ok: true, prefixes: cfg.allowlists[cwd] })
+  }
+  if (m === "POST" && p === "/api/allowlist/remove") {
+    const body = JSON.parse((await readBody(req)) || "{}")
+    const cwd = allowlistKeyFor(String(body.cwd ?? ""))
+    const prefix = String(body.prefix ?? "").trim().toLowerCase()
+    const cfg = loadConfig()
+    const list = cfg.allowlists ?? {}
+    const set = new Set(list[cwd] ?? [])
+    set.delete(prefix)
+    cfg.allowlists = { ...list, [cwd]: [...set] }
+    saveConfig(cfg)
+    return json(res, 200, { ok: true, prefixes: cfg.allowlists[cwd] ?? [] })
   }
   // P1-9 搜索引擎设置：bing（默认）/ duckduckgo / baidu
   if (m === "POST" && p === "/api/search-engine") {
@@ -1782,14 +2390,17 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     fresh.meta.updatedAt = Date.now()
     fresh.meta.ctxPct = calcCtxPct(before)
     persist(fresh.meta, before)
+    // T92：撤回把消息连同它的图一起截掉了 → 清掉不再被引用的附件（edit 模式不清理：图马上要重发）
+    if (mode === "recall") pruneAttachments(sessionId, referencedPaths(before))
     broadcast({ type: "reload", sessionId })
     // notice 带 sessionId：只有对应会话的界面显示这条提示（撤回 A 会话不该在 B 会话界面弹「消息已撤回」）
     broadcast({ type: "notice", sessionId, text: mode === "recall" ? "消息已撤回" : "消息已更新，重新发送中" })
     if (mode === "edit") {
       // 编辑 = 取回修改后立即重新发送（user 消息 + assistant 回复都由 runTurn 走正常流程）
       json(res, 200, { ok: true, resent: true })
+      // T92：落库的图片引用可能是 /api/file（外置后）或 dataUrl（未迁移）——两种都还原成裸 base64 再喂模型
       const imagesBase64 = (editImagesDataUrl ?? [])
-        .map((d) => /^data:image\/[a-z+.-]+;base64,(.+)$/i.exec(d)?.[1])
+        .map((d) => attachmentToBase64(d))
         .filter((b): b is string => !!b)
       void runTurn(sessionId, newContent, imagesBase64.length ? imagesBase64 : undefined, editImagesDataUrl).finally(pumpQueue)
       return
@@ -1826,36 +2437,49 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   }
   if (m === "POST" && p === "/api/messages/recall") { await recallEdit("recall"); return }
   if (m === "POST" && p === "/api/messages/edit") { await recallEdit("edit"); return }
-  // D6 撤销某轮模型对文件的修改：{sessionId, ts}。按内存快照逐文件恢复原内容（write 新建且原本不存在 → 删除）。
+  // D6 撤销某轮模型对文件的修改：{sessionId, ts}。按快照逐文件恢复原内容（write 新建且原本不存在 → 删除）。
   // 撤销后清除该轮快照（不可重复撤）；会话 busy 时拒绝（模型可能正改同一批文件）。
   if (m === "POST" && p === "/api/sessions/undo-files") {
     const body = JSON.parse((await readBody(req)) || "{}")
     const sessionId = String(body.sessionId ?? "")
     const ts = Number(body.ts)
-    const per = undoSnapshots.get(sessionId)
-    if (!per || !per.has(ts)) return json(res, 404, { error: "没有该轮的文件快照（可能已撤销或来自更早的会话进程）" })
     if (sessionBusy.has(sessionId)) return json(res, 409, { error: "任务进行中，请先停止再撤销" })
-    const edits = per.get(ts)!
+    // B2：撤销目标只从 resolveUndoTurn 一处出（内存 > 磁盘）。**不在这里另写一套按 ts 找快照的逻辑。**
+    const target = resolveUndoTurn(undoSnapshots.get(sessionId)?.get(ts), sessionId, ts)
+    if (!target) {
+      // 分三种情况说，别再把「已撤过 / 没开落盘 / 文件太大」混成一句让人没法行动
+      const file = loadSession(sessionId)
+      const msg = file?.messages.find((x) => x.ts === ts && x.role === "assistant")
+      return json(res, 404, { error: undoMissReason((msg?.fileEdits?.length ?? 0) > 0) })
+    }
     const restored: string[] = []
     const failed: string[] = []
-    for (const f of edits) {
+    for (const f of target.files) {
+      const act = f.plan
+      // 决策已在 resolveUndoTurn 里做死（内存侧走 planUndo，磁盘侧同一套语义），这里只执行
+      if (act.op === "refuse") {
+        failed.push(`${f.path}（${act.reason}，无法自动恢复）`)
+        continue
+      }
       try {
-        if (f.snapshot == null) {
+        if (act.op === "delete") {
           // 原本不存在的文件（本轮新建）→ 删除
           if (fs.existsSync(f.path)) fs.unlinkSync(f.path)
           restored.push(`${f.path}（删除新建）`)
         } else {
           fs.mkdirSync(path.dirname(f.path), { recursive: true })
-          fs.writeFileSync(f.path, f.snapshot, "utf8")
+          fs.writeFileSync(f.path, act.content, "utf8")
           restored.push(f.path)
         }
       } catch {
         failed.push(f.path)
       }
     }
-    per.delete(ts)
-    broadcast({ type: "notice", text: `已撤销 ${restored.length} 个文件的修改${failed.length ? `，${failed.length} 个失败` : ""}` })
-    return json(res, 200, { ok: true, restored: restored.length, failed })
+    undoSnapshots.get(sessionId)?.delete(ts)
+    removeUndoTurn(sessionId, ts) // B2：撤过了就不再留磁盘快照（幂等）
+    const fromDisk = target.source === "disk" ? "（快照来自重启前）" : ""
+    broadcast({ type: "notice", text: `已撤销 ${restored.length} 个文件的修改${fromDisk}${failed.length ? `，${failed.length} 个失败` : ""}` })
+    return json(res, 200, { ok: true, restored: restored.length, failed, source: target.source })
   }
   // 回复评分：{sessionId, ts, feedback: "up"|"down"|null}。点赞/点踩落在消息上并进入会话记忆，
   // 模型每次生成都会被提醒「回答会被用户评分」，评分反馈注入 systemSuffix。
@@ -1887,7 +2511,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     if (!file) return json(res, 404, { error: "会话不存在" })
     const idx = file.messages.findIndex((x) => x.ts === ts && x.role === "assistant")
     if (idx < 0) return json(res, 404, { error: "消息不存在" })
-    // 找它前面的 user 提问；图片 dataUrl 原样透传给 runTurn
+    // 找它前面的 user 提问；图片引用原样透传给 runTurn
     let userIdx = -1
     for (let i = idx - 1; i >= 0; i--) {
       if (file.messages[i].role === "user") { userIdx = i; break }
@@ -1896,13 +2520,17 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const userMsg = file.messages[userIdx]
     // 消息体里的 [图片n] 占位换回 [IMG:n] 标记（runTurn 发给引擎的 text 需要内部标记）
     const text = userMsg.content.replace(/\[图片(\d+)\]/g, (_, n) => `[IMG:${Number(n) - 1}]`)
-    const images = userMsg.images ?? []
+    // T92：落库的图片引用可能是 /api/file（已外置）或 dataUrl（老会话未迁移）——
+    // 统一还原成裸 base64 喂模型，同时把**原引用**继续作为落库值透传（runTurn 遇到非 dataUrl 原样保留，
+    // 老会话的 dataUrl 则会在那里被顺手外置）。所以这里不清理附件：这些图马上还要用。
+    const refs = userMsg.images ?? []
+    const images = refs.map((r) => attachmentToBase64(r)).filter((b): b is string => !!b)
     const before = file.messages.slice(0, userIdx)
     file.meta.updatedAt = Date.now()
     file.meta.ctxPct = calcCtxPct(before)
     persist(file.meta, before)
     broadcast({ type: "reload", sessionId })
-    void runTurn(sessionId, text, images.length ? images : undefined, images.length ? images : undefined).finally(pumpQueue)
+    void runTurn(sessionId, text, images.length ? images : undefined, refs.length ? refs : undefined).finally(pumpQueue)
     return json(res, 200, { ok: true, regenerated: true })
   }
   // #29 本地文件读取（前端预览/下载用）：?p=绝对路径。仅允许常见媒体/文档扩展名，防任意文件读取
@@ -1910,25 +2538,16 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const target = url.searchParams.get("p")?.trim() ?? ""
     if (!target) return json(res, 400, { error: "缺少 p 参数" })
     const ext = path.extname(target).toLowerCase()
-    const ALLOWED = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".csv", ".xlsx", ".xls", ".docx", ".doc", ".pdf", ".mp4", ".zip", ".txt", ".json", ".md", ".html", ".htm", ".log", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".css", ".py", ".java", ".go", ".rs", ".c", ".cpp", ".h", ".hpp", ".cs", ".sh", ".bat", ".ps1", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".xml", ".sql", ".env", ".gitignore"])
-    if (!ALLOWED.has(ext)) return json(res, 403, { error: `不允许读取该类型文件: ${ext || "(无扩展名)"}` })
+    // T93：白名单与 MIME 表抽到 src/util/filetypes.ts —— 它必须和 attachments.ts 的
+    // 外置扩展名表一致（曾经 avif 只在附件侧有、白名单里没有 → 用户看到裂图）。
+    // 一致性由 tests/filetypes.test.ts 断言守住。
+    if (!isAllowedFileExt(ext)) return json(res, 403, { error: `不允许读取该类型文件: ${ext || "(无扩展名)"}` })
     try {
       const resolved = path.resolve(target)
       if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return json(res, 404, { error: "文件不存在" })
-      const MIME: Record<string, string> = {
-        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
-        ".bmp": "image/bmp", ".svg": "image/svg+xml", ".csv": "text/csv", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".xls": "application/vnd.ms-excel", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".doc": "application/msword", ".pdf": "application/pdf", ".mp4": "video/mp4", ".zip": "application/zip",
-        ".txt": "text/plain", ".json": "application/json", ".md": "text/markdown",
-        ".html": "text/html", ".htm": "text/html", ".log": "text/plain", ".xml": "text/xml",
-        ".js": "text/javascript", ".mjs": "text/javascript", ".cjs": "text/javascript", ".ts": "text/plain", ".tsx": "text/plain", ".jsx": "text/plain",
-        ".css": "text/css", ".py": "text/plain", ".java": "text/plain", ".go": "text/plain", ".rs": "text/plain", ".c": "text/plain", ".cpp": "text/plain", ".h": "text/plain", ".hpp": "text/plain", ".cs": "text/plain",
-        ".sh": "text/plain", ".bat": "text/plain", ".ps1": "text/plain", ".yml": "text/plain", ".yaml": "text/plain", ".toml": "text/plain", ".ini": "text/plain", ".cfg": "text/plain", ".conf": "text/plain", ".sql": "text/plain",
-      }
       const data = fs.readFileSync(resolved)
       res.writeHead(200, {
-        "Content-Type": MIME[ext] ?? "application/octet-stream",
+        "Content-Type": MIME_BY_EXT[ext] ?? "application/octet-stream",
         "Content-Length": data.length,
         "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(path.basename(resolved))}`,
       })
@@ -2017,6 +2636,15 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
 export function startGateway(port = PORT): void {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://${HOST}`)
+    // T80 局域网鉴权：/api/* 对非本机来源要求配对 token（本地 127.0.0.1/::1 永远放行）。
+    // 静态页放行（远程浏览器要先加载页面才能输 token 配对）；/api/pair 自身只在本地可达。
+    if (url.pathname.startsWith("/api/") && url.pathname !== "/api/pair" && !isLocalReq(req)) {
+      const tok = req.headers["x-yy-token"] || url.searchParams.get("token") || ""
+      if (!authToken || tok !== authToken) {
+        json(res, 401, { error: "需要配对 token：在本机打开应用后于设置页查看，或用本地 /api/pair 获取" })
+        return
+      }
+    }
     if (url.pathname.startsWith("/api/")) {
       handleApi(req, res, url).catch((e) => json(res, 500, { error: String(e) }))
       return
@@ -2024,7 +2652,13 @@ export function startGateway(port = PORT): void {
     serveStatic(res, url.pathname)
   })
   const wss = new WebSocketServer({ server, path: "/ws" })
-  wss.on("connection", (ws) => {
+  wss.on("connection", (ws, wsReq) => {
+    // T80：WS 同样受鉴权——非本机连接必须带 ?token= 且匹配，否则直接断开
+    if (!isLocalReq(wsReq)) {
+      const wsUrl = new URL(wsReq.url ?? "/", `http://${HOST}`)
+      const tok = wsUrl.searchParams.get("token") || ""
+      if (!authToken || tok !== authToken) { ws.close(4401, "unauthorized"); return }
+    }
     wsClients.add(ws)
     ws.send(JSON.stringify({ type: "state", ...statePayload() }))
     ws.on("close", () => wsClients.delete(ws))
@@ -2061,11 +2695,40 @@ export function startGateway(port = PORT): void {
     }
   }, 300)
 
-  // P2-4 成果分享：HOST 默认 0.0.0.0，局域网设备能直接打开 /api/file 分享链接
+  // T92：默认只听本机；要局域网分享成果链接就把 config.lanShare 设成 true（或 YYAGENT_HOST=0.0.0.0）
   server.listen(port, HOST, () => {
-    console.log(`[yyagent-gateway] http://127.0.0.1:${port} （监听 ${HOST}；0.0.0.0 = 局域网可访问分享链接）`)
+    console.log(
+      LAN_SHARE
+        ? `[yyagent-gateway] http://127.0.0.1:${port} （监听 ${HOST}：局域网可访问分享链接，/api/* 需配对 token）`
+        : `[yyagent-gateway] http://127.0.0.1:${port} （仅本机；局域网分享需设 lanShare=true）`,
+    )
+    // T80 首次启动生成配对 token（局域网访问 /api/* 需携带）；已有则沿用
+    try {
+      const cfg0 = loadConfig()
+      if (!cfg0.authToken) {
+        cfg0.authToken = crypto.randomUUID().replace(/-/g, "")
+        saveConfig(cfg0)
+      }
+      authToken = cfg0.authToken
+      console.log(`[yyagent-gateway] 局域网配对 token 已就绪（本机 /api/pair 可取，设置页可查看）`)
+    } catch {
+      /* token 生成失败不阻断启动（此时非本机 /api 会被 401） */
+    }
     // P1-8 默认 MCP 接入（Edge + Tabbit），仅首次且无配置时预置
     import("./agent/config.js").then(({ ensureDefaultMcpServers }) => ensureDefaultMcpServers()).catch(() => {})
+    // T92 索引自愈：让 index.json 与磁盘上的会话文件对齐——补回「文件在、列表没有」的会话，
+    // 剔除「列表里有、文件没了」的条目。必须排在 backfillUsage 之前，否则刚补回来的会话会被漏掉回填。
+    try {
+      const rep = repairIndex()
+      if (rep.changed) {
+        console.log(`[会话] 索引已修复：补回 ${rep.recovered} 个、剔除 ${rep.dropped} 个（现共 ${rep.total} 条）`)
+      }
+      if (rep.unreadable > 0) {
+        console.warn(`[会话] ${rep.unreadable} 个会话文件读不出来（结构损坏），已跳过；文件仍保留在 ~/.yyagent/sessions/`)
+      }
+    } catch {
+      /* 索引修复失败不影响启动 */
+    }
     // T45 用量账本一次性回填：把账本上线前各会话的累计 usage 摊到消息所在的天（幂等，见 usage.ts）
     try {
       const n = backfillUsage()
@@ -2079,6 +2742,82 @@ export function startGateway(port = PORT): void {
       pruneUsage(new Set(listSessions().map((m) => m.id)))
     } catch {
       /* 剪枝失败不影响启动 */
+    }
+    // T93 B2 撤销快照清理：过期/超预算的清掉。快照是派生数据，清它不需要用户批准；
+    // 与之相对，checkpoint 的残留只报告不自动处理（那是「哪一半算已完成」的用户判断）。
+    setImmediate(() => {
+      try {
+        const n = sweepUndoSnapshots()
+        if (n > 0) console.log(`[快照] 清理了 ${n} 个过期/超预算的撤销快照轮次`)
+      } catch {
+        /* 清理失败不影响启动 */
+      }
+    })
+    // T93 P1 断点恢复：扫上次进程被杀时留下的未完成回合。只报告不自动处理——
+    // 「哪一半算已完成」是用户的判断，不该由启动逻辑替他决定。
+    setImmediate(() => {
+      try {
+        const cps = listCheckpoints()
+        if (!cps.length) return
+        console.warn(`[断点] 发现 ${cps.length} 个未完成的回合（上次进程可能被中断）：`)
+        for (const c of cps.slice(0, 10)) {
+          console.warn(`  · ${c.title || c.sessionId} — ${describeCheckpoint(c)}（sessionId=${c.sessionId}）`)
+        }
+        if (cps.length > 10) console.warn(`  …另有 ${cps.length - 10} 个`)
+        broadcast({
+          type: "notice",
+          text:
+            `发现 ${cps.length} 个未完成的回合（上次进程被中断）：${cps.slice(0, 3).map((c) => c.title || c.sessionId).join("、")}` +
+            `${cps.length > 3 ? " 等" : ""}。可采纳已产出的部分、按原输入重新发起，或丢弃。`,
+        })
+      } catch {
+        /* 扫描失败不影响启动 */
+      }
+    })
+    // T92 会话图片外置：①清掉已删会话遗留的附件目录；②把历史会话里内嵌的 dataUrl 迁移成文件引用。
+    // 附件是可再生的派生数据，任何失败都不该挡住启动。
+    try {
+      const aliveIds = new Set(listSessions().map((m) => m.id))
+      const swept = sweepOrphanAttachments(aliveIds)
+      if (swept > 0) console.log(`[附件] 清理了 ${swept} 个已删会话的附件目录`)
+      // 迁移 + 孤儿扫描要读写几十 MB（历史会话多时），放到监听之后异步跑，别拖慢启动
+      setImmediate(() => {
+        try {
+          const r = migrateInlineImages()
+          if (r.images > 0) console.log(`[附件] 内嵌图片外置完成：${r.sessions} 个会话 / ${r.images} 张图`)
+        } catch (e) {
+          console.error(`[附件] 内嵌图片迁移失败（下次启动重试）：${(e as Error).message}`)
+        }
+        try {
+          // 迁移之后再扫一次：撤回 / 编辑 / 重新生成留下的「文件在、但没人引用」的图
+          const u = sweepUnreferencedAttachments()
+          if (u.files > 0) console.log(`[附件] 清理了 ${u.files} 个不再被引用的图片文件`)
+        } catch {
+          /* 孤儿清理失败不影响启动 */
+        }
+        try {
+          const usage = attachmentsUsage(3)
+          const mb = usage.bytes / 1024 / 1024
+          if (usage.bytes > ATTACH_WARN_BYTES) {
+            console.warn(
+              `[附件] 图片附件已占用 ${mb.toFixed(0)} MB（${usage.files} 个文件 / ${usage.sessions} 个会话）。` +
+                `删除不用的会话即可回收；目录：${attachmentsRoot()}`,
+            )
+          } else if (usage.files > 0) {
+            console.log(`[附件] 图片附件占用 ${mb.toFixed(1)} MB（${usage.files} 个文件）`)
+          }
+        } catch {
+          /* 统计失败不影响启动 */
+        }
+      })
+    } catch {
+      /* 附件清理失败不影响启动 */
+    }
+    // T83 自动备份调度：距上次超过 intervalHours 才真正跑（默认 24h），滚动保留 keep 份
+    try {
+      startBackupSchedule()
+    } catch {
+      /* 备份调度失败不影响启动 */
     }
     scheduleAllTasks()
   })

@@ -32,3 +32,7 @@ reminder-buy-ticket.ps1
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---- 运行时卸载/打包临时目录 ----
+.agent-outputs/
+release-repair/

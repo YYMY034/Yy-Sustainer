@@ -33,7 +33,11 @@
     "typecheck": "tsc --noEmit",
     "bundle": "node scripts/bundle.mjs",
     "dist": "node scripts/bundle.mjs && electron-builder --win nsis",
-    "dist:dir": "node scripts/bundle.mjs && electron-builder --win dir"
+    "dist:dir": "node scripts/bundle.mjs && electron-builder --win dir",
+    "check": "tsc --noEmit && tsx scripts/check-t90-perms.ts",
+    "check:all": "node scripts/run-all-checks.mjs",
+    "test": "node scripts/run-unit-tests.mjs",
+    "test:all": "node scripts/run-all-checks.mjs && node scripts/run-unit-tests.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^1.0.0",

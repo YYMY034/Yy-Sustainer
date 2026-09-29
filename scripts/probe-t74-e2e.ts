@@ -1,7 +1,8 @@
 // T74 端到端：走真实引擎链路（含默认全工具）打**挂掉的通道**，验证：
 //   1) 抛出来的 message 是真实原因（ECONNREFUSED / 401 / 402），不再是 "No output generated"
 //   2) 上层能据此判出「不该重试」
-// 用配置里已存在的 local/bai 通道（指向 127.0.0.1:8899，当前无监听）——无需改动任何配置。
+// 用配置里已存在的 local/bai 通道——打的是用户真实配置里的通道（活体诊断，非自包含测试）；
+// intentionally 不建隔离配置、不动态化端口：诊断对象就是这条真实链路。
 import { runAgentStream } from "../src/agent/loop.js"
 import { describeFailure, retryBudget } from "../src/agent/errors.js"
 

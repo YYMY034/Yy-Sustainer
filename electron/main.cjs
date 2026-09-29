@@ -10,7 +10,7 @@
 //  ② 网关是按请求现读 web/index.html 的（静态文件热更新），必须以真实文件存在；
 //  ③ 引擎还会用 __dirname 派生 web/、scripts/toast.ps1、yyagentd.config.json —— 都在 resources/ 同级。
 //  所以 dist/ web/ scripts/ yyagentd.config.json 走 extraResources（见 electron-builder.yml）。
-const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron")
+const { app, BrowserWindow, shell, dialog, ipcMain, Tray, Menu, nativeImage } = require("electron")
 const { spawn } = require("node:child_process")
 const http = require("node:http")
 const net = require("node:net")
@@ -34,6 +34,12 @@ const ENGINE_ROOT = IS_PACKAGED ? process.resourcesPath : ROOT
 let engine = null
 let win = null
 let PORT = DEFAULT_PORT
+// ---- 系统托盘：关窗 ≠ 退出 ----
+// 语义：点页面 × / 系统关闭 = 藏进托盘（引擎与定时任务继续跑）；只有托盘右键「退出」
+// 才走 app.quit()。quitting 标志是唯一放行口——app.quit() 自己也会触发 close 事件，
+// 不放行就成了「托盘点了退出却退不掉」的经典竞态。
+let tray = null
+let quitting = false
 
 // 引擎日志落盘：GUI 程序在 Windows 上没有控制台，stdio inherit 的输出会直接消失，
 // 出问题时用户无从反馈。统一写到 ~/.yyagent/logs/engine.log（与网关自身的 logs 同处）。
@@ -132,8 +138,7 @@ function createWindow() {
       sandbox: true,
       preload: path.join(__dirname, "preload.cjs"),
     },
-  })
-  // 页面里所有外链交给系统浏览器，不在窗口内跳走
+  })  // 页面里所有外链交给系统浏览器，不在窗口内跳走
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith(`http://${HOST}:${PORT}`)) return { action: "allow" }
     shell.openExternal(url)
@@ -163,6 +168,60 @@ function createWindow() {
   }
   bindToggle(win.webContents)
   win.webContents.on("devtools-opened", () => bindToggle(win.webContents.devToolsWebContents))
+  // 系统托盘：点 × = 藏起来（引擎照跑），不是退出。页面自绘标题栏的关闭按钮走
+  // yyagent:win-close → win.close()，同样被这里拦住——两条关闭路径语义一致。
+  // 用户明确要求：藏托盘时静默，不弹通知（首次使用的引导由托盘图标本身承担）。
+  win.on("close", (e) => {
+    if (quitting) return // app.quit() 触发的 close：放行（否则永远退不掉）
+    e.preventDefault()
+    win.hide()
+  })
+}
+
+/** 托盘图标：开发态用仓库根的 ico；发行态从 resources 找；都没有就画一个纯色托盘块。 */
+function trayIconImage() {
+  const candidates = [
+    path.join(ROOT, "yyagent.ico"), // 开发态（electron/ 的上一级）
+    path.join(ENGINE_ROOT, "yyagent.ico"), // 发行态（extraResources 平铺）
+    path.join(ENGINE_ROOT, "web", "yyagent.ico"), // 发行态（web 目录一并进 resources）
+  ]
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const img = nativeImage.createFromPath(p)
+        if (!img.isEmpty()) return img
+      }
+    } catch { /* 换下一个候选 */ }
+  }
+  // 兜底：16×16 纯色 PNG（tray 空图标在个别系统上不显示，宁可丑也要在）
+  try {
+    return nativeImage.createFromDataURL(
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAKklEQVR42mNgYGD4z0AEYBxVSFpF" +
+      "JwqbGzMI0rVbIyoYlJmranC1ahVPQAsAwsVdQ2QhFAAAAAASUVORK5CYII=",
+    )
+  } catch {
+    return nativeImage.createEmpty()
+  }
+}
+
+function showWindow() {
+  if (!win) { createWindow(); return }
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+}
+
+function createTray() {
+  if (tray) return
+  tray = new Tray(trayIconImage())
+  tray.setToolTip("Yy Sustainer")
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "显示主窗口", click: () => showWindow() },
+    { type: "separator" },
+    { label: "退出", click: () => { quitting = true; app.quit() } },
+  ]))
+  // 左键单击也唤出窗口（Windows 托盘惯例；双击由同一路径兜住）
+  tray.on("click", () => showWindow())
 }
 
 app.whenReady().then(async () => {
@@ -182,13 +241,15 @@ app.whenReady().then(async () => {
     return
   }
   createWindow()
+  createTray() // 托盘与窗口同生：关窗后有落脚点
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
 app.on("window-all-closed", () => {
-  app.quit()
+  // 托盘模式：窗口全关也不退出（引擎与定时任务继续在后台跑）。
+  // 真正的退出只走托盘「退出」→ app.quit()。macOS 靠上面的 activate 重建窗口。
 })
 
 // #28 系统文件夹选择对话框：渲染进程经 preload bridge 调用（sandbox 下 preload 只能用 ipcRenderer.invoke）
@@ -211,5 +272,9 @@ app.on("before-quit", () => {
   if (engine) {
     try { engine.kill() } catch { /* 忽略 */ }
     engine = null
+  }
+  if (tray) {
+    try { tray.destroy() } catch { /* 忽略 */ }
+    tray = null
   }
 })

@@ -11,8 +11,9 @@
 import http from "node:http"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { streamText } from "ai"
+import { pickFreePort } from "./pick-port.js"
 
-const PORT = 18899
+const PORT = await pickFreePort()
 
 const server = http.createServer((req, res) => {
   const url = req.url ?? ""

@@ -2,12 +2,13 @@ import { tool, type Tool } from "ai"
 import { z } from "zod"
 import { spawn } from "node:child_process"
 import { AsyncLocalStorage } from "node:async_hooks"
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs"
+import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { homedir } from "node:os"
 import fg from "fast-glob"
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici"
-import { gate, isDangerCommand, type PermissionMode } from "./permissions.js"
+import { gate, gateFileWrite, insideWorkspace, isDangerCommand, clearSessionGrants, type PermissionMode } from "./permissions.js"
+import { dockerAvailable, runInSandbox } from "./sandbox.js"
 import { loadConfig } from "./config.js"
 import { runHooksOnTool } from "./hooks.js"
 import { memoryTools } from "./memory.js"
@@ -16,10 +17,13 @@ import { makeTodoTool } from "./todo.js"
 import { makeAskTool } from "./ask.js"
 import { upsertDbRecord, queryDb, deleteDbRecord, listDbs, BUILTIN_DBS } from "./db.js"
 import { sceneTools } from "./sceneTools.js"
+import { BG_LOG_KEEP, BG_LOG_MAX_AGE_MS, bgLogPath, getBgTask, listBgTasks, nextBgId, saveBgTask, sweepBgRecords } from "./bgStore.js"
 import { taskTools } from "./tasks.js"
 import { trackFileChange } from "./fileTrack.js"
 import { psCommand, runPowerShell, truncate } from "./ps.js"
 import { makeComputerTool } from "./computer.js"
+// T92：后台任务日志（~/.yyagent/bg/<id>.log）按数量/年龄清理
+import { sweepOldFiles } from "../util/logfile.js"
 
 // 出海代理：优先读 config.proxy（T67——Electron/桌面启动读不到终端环境变量，配置文件是
 // 唯一可靠来源），其次回退 HTTP(S)_PROXY 环境变量（EnvHttpProxyAgent 原生行为）。
@@ -54,6 +58,8 @@ export interface ToolContext {
   cwd: string
   broker?: import("./ask.js").QuestionBroker
   sessionId?: string
+  /** T93：本轮的中止信号——delegate 要把它透传给子代理，否则主循环 abort 后子代理还在跑 */
+  signal?: AbortSignal
 }
 
 export const toolCtx = new AsyncLocalStorage<ToolContext>()
@@ -61,6 +67,8 @@ export const toolCtx = new AsyncLocalStorage<ToolContext>()
 function currentCwd(): string {
   return toolCtx.getStore()?.cwd ?? process.cwd()
 }
+
+/** T90：目标路径是否落在工作区内——T93 挪到 permissions.ts（与 gateFileWrite 同处），这里只引用 */
 
 function stripTags(s: string): string {
   return s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim()
@@ -78,12 +86,22 @@ interface BgTask {
 }
 
 const bgTasks = new Map<string, BgTask>()
-let bgSeq = 0
+/** T92 上次清理后台日志目录的时间（节流用） */
+let lastBgSweep = 0
 
 function startBackground(command: string, cwd: string): string {
-  const id = `bg-${++bgSeq}`
+  // B1：id 从磁盘已有最大序号起步。用进程内计数器的话重启后又是 bg-1，
+  // 会覆盖旧记录并和还在保留期内的 bg-1.log 错配。
+  const id = nextBgId()
   const logDir = join(homedir(), ".yyagent", "bg")
   mkdirSync(logDir, { recursive: true })
+  // T92：后台任务日志是「一次任务一个文件」，只增不减 → 保留最近 50 个且 7 天内的。
+  // 节流到 5 分钟一次：目录扫描不该成为每次起后台命令的固定开销。
+  if (Date.now() - lastBgSweep > 300_000) {
+    lastBgSweep = Date.now()
+    sweepOldFiles(logDir, { keep: BG_LOG_KEEP, maxAgeMs: BG_LOG_MAX_AGE_MS, suffix: ".log" })
+    sweepBgRecords() // B1：日志没了，对应的元数据记录一并清
+  }
   const logFile = join(logDir, `${id}.log`)
   const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", psCommand(command)], {
     cwd,
@@ -95,10 +113,13 @@ function startBackground(command: string, cwd: string): string {
   child.stderr?.pipe(stream)
   const entry: BgTask = { pid: child.pid ?? 0, command, logFile, startedAt: Date.now(), done: false }
   bgTasks.set(id, entry)
+  // B1：元数据落盘——进程内 Map 重启即空，而日志还在，那时模型「看得到路径拿不到上下文」
+  saveBgTask({ id, pid: entry.pid, command, logFile, cwd, startedAt: entry.startedAt })
   child.on("exit", (code) => {
     entry.done = true
     entry.exitCode = code
     stream.end()
+    saveBgTask({ id, pid: entry.pid, command, logFile, cwd, startedAt: entry.startedAt, endedAt: Date.now(), exitCode: code })
   })
   return id
 }
@@ -108,12 +129,15 @@ type PermissionMode3 = "confirm-all" | "danger-confirm" | "full-auto"
 const sessionPermission = new Map<string, PermissionMode3>()
 export function setSessionPermission(sessionId: string, mode: PermissionMode3): void {
   sessionPermission.set(sessionId, mode)
+  // T90：换档位＝用户重新表态，此前攒下的会话级授权（桌面操控/MCP 写操作）一律作废
+  clearSessionGrants(sessionId)
 }
 export function getSessionPermission(sessionId: string): PermissionMode3 | undefined {
   return sessionPermission.get(sessionId)
 }
 export function deleteSessionPermission(sessionId: string): void {
   sessionPermission.delete(sessionId)
+  clearSessionGrants(sessionId)
 }
 function effectivePermission(): PermissionMode3 {
   const sid = toolCtx.getStore()?.sessionId
@@ -121,17 +145,21 @@ function effectivePermission(): PermissionMode3 {
   return (override ?? loadConfig().permission ?? "danger-confirm") as PermissionMode3
 }
 
+/** T90：MCP / 桌面操控等外部调用点要复用同一套「会话覆盖 > 全局」的档位判定，故导出 */
+export { effectivePermission }
+
 // ---------- 工具定义 ----------
 
 export const bashTool = tool({
   description:
-    "在 Windows PowerShell 中执行命令。危险命令（sudo、rm -rf、提权、密钥赋值）按权限档位确认或拒绝。构建/测试/长任务用 background=true 转后台，用 bg_read 查看输出。",
+    "在 PowerShell 中执行命令（沙箱模式时在 Docker 的 Linux bash 中执行，工作区挂载 /workspace）。危险命令（sudo、rm -rf、提权、密钥赋值）按权限档位确认或拒绝。构建/测试/长任务用 background=true 转后台，bg_read 看输出。",
   inputSchema: z.object({
-    command: z.string().describe("要执行的 PowerShell 命令"),
-    timeoutMs: z.number().optional().describe("前台超时毫秒数，默认 120000"),
-    background: z.boolean().optional().describe("转为后台任务（不阻塞），返回任务 id 与日志路径"),
+    command: z.string().describe("要执行的命令（默认 PowerShell；沙箱模式为 Linux bash）"),
+    timeoutMs: z.number().optional().describe("前台超时（毫秒），默认 120000"),
+    background: z.boolean().optional().describe("转后台（不阻塞），返回任务 id 与日志路径；后台任务不进沙箱"),
+    sandbox: z.boolean().optional().describe("显式要求在 Docker 沙箱内执行（工作区挂载 /workspace）；会话已开沙箱时无需传"),
   }),
-  async execute({ command, timeoutMs, background }) {
+  async execute({ command, timeoutMs, background, sandbox }) {
     const mode = effectivePermission()
     // 拆分器调用（toolCtx 无 broker 但跑在拆分专用标志下）跳过 bash 权限门——纯 JSON 输出不会执行命令
     const isSplitter = (globalThis as Record<string, unknown>).__yyagentSplitter === true
@@ -143,9 +171,26 @@ export const bashTool = tool({
           danger: isDangerCommand(command),
           mode,
           broker: toolCtx.getStore()?.broker,
+          command,
+          cwd: toolCtx.getStore()?.cwd, // T84：项目级白名单按 cwd 匹配
         })
     if (rejection) return rejection
     const cwd = currentCwd()
+    // T88 沙箱执行：显式 sandbox=true 或会话开启沙箱模式 → Docker 容器内跑（权限门已在宿主侧先行）。
+    // 无 Docker / 启动失败 → 回退本机并如实说明（模型下一步可自行适配语法差异）。后台任务不进沙箱。
+    const sandboxCfg = loadConfig().sandbox
+    if ((sandbox === true || sandboxCfg?.enabled === true) && !background) {
+      const dockerOk = await dockerAvailable()
+      if (dockerOk) {
+        try {
+          const r = await runInSandbox(command, cwd, sandboxCfg?.image || "node:22-bookworm", timeoutMs ?? 120_000)
+          return r.output
+        } catch (e) {
+          return `[沙箱执行失败：${String((e as Error).message ?? e).slice(0, 120)}，已回退本机执行]\n` + runPowerShell(command, timeoutMs ?? 120_000, cwd)
+        }
+      }
+      return `[沙箱不可用：未检测到 Docker，已在本机 PowerShell 执行]\n` + runPowerShell(command, timeoutMs ?? 120_000, cwd)
+    }
     if (background) {
       const id = startBackground(command, cwd)
       const e = bgTasks.get(id)!
@@ -156,29 +201,66 @@ export const bashTool = tool({
 })
 
 export const bgReadTool = tool({
-  description: "查看后台任务：不传 task_id 列出全部任务状态；传 task_id 读该任务日志尾部",
+  description: "查看后台任务：不传 task_id 列出全部任务状态（含网关重启前启动的）；传 task_id 读该任务日志尾部",
   inputSchema: z.object({
     task_id: z.string().optional().describe("后台任务 id，如 bg-1"),
     lines: z.number().optional().describe("读取日志尾部行数，默认 40"),
   }),
   async execute({ task_id, lines }) {
     if (!task_id) {
-      if (!bgTasks.size) return "暂无后台任务"
-      return [...bgTasks.entries()]
-        .map(([id, e]) => {
-          const dur = Math.round((Date.now() - e.startedAt) / 1000)
-          return `${id} ${e.done ? `已结束(code=${e.exitCode})` : "运行中"} ${dur}s pid=${e.pid} | ${e.command.slice(0, 80)} | ${e.logFile}`
-        })
-        .join("\n")
+      // B1：磁盘 ∪ 内存。磁盘里有、内存里没有 = 网关重启前启动的任务——
+      // 日志还在，只是本进程不知道它的退出码。**不猜**：进程没标结束就只说「状态未知」，
+      // 不写 exitCode 冒充「已结束」（那会让模型以为任务失败了）。
+      const seen = new Set<string>()
+      const rows: string[] = []
+      for (const [id, e] of bgTasks) {
+        seen.add(id)
+        const dur = Math.round((Date.now() - e.startedAt) / 1000)
+        rows.push(`${id} ${e.done ? `已结束(code=${e.exitCode})` : "运行中"} ${dur}s pid=${e.pid} | ${e.command.slice(0, 80)} | ${e.logFile}`)
+      }
+      for (const r of listBgTasks()) {
+        if (seen.has(r.id)) continue
+        const dur = Math.round(((r.endedAt ?? Date.now()) - r.startedAt) / 1000)
+        const state = r.endedAt !== undefined ? `已结束(code=${r.exitCode ?? "?"})` : "状态未知（网关重启过，进程可能仍在运行）"
+        rows.push(`${r.id} ${state} ${dur}s pid=${r.pid} | ${r.command.slice(0, 80)} | ${r.logFile}`)
+      }
+      rows.sort((a, b) => {
+        const ia = /^bg-(\d+)/.exec(a), ib = /^bg-(\d+)/.exec(b)
+        return Number(ib?.[1] ?? 0) - Number(ia?.[1] ?? 0)
+      })
+      return rows.length ? rows.join("\n") : "暂无后台任务"
     }
     const e = bgTasks.get(task_id)
-    if (!e) return `未找到任务 ${task_id}（用 bg_read 不带参数列出全部）`
-    if (!existsSync(e.logFile)) return `日志尚无内容（任务${e.done ? "已结束" : "运行中"}）`
-    const all = readFileSync(e.logFile, "utf8").split(/\r?\n/)
+    // task_id 是模型给的输入——不合法就直接当「没这个任务」，绝不拿它拼路径
+    const rec = getBgTask(task_id)
+    const logFile = e?.logFile ?? rec?.logFile ?? bgLogPath(task_id)
+    if (!logFile || !existsSync(logFile)) {
+      // 日志不在就分两种说：有记录=任务跑过但日志被清了；没记录=这个 id 从没存在过
+      return rec
+        ? `未找到任务 ${task_id} 的日志（日志保留 7 天 / 最近 ${BG_LOG_KEEP} 个，可能已被清理）`
+        : `未找到任务 ${task_id}（用 bg_read 不带参数列出全部）`
+    }
+    const all = readFileSync(logFile, "utf8").split(/\r?\n/)
     const tail = all.slice(-(lines ?? 40)).join("\n")
-    return `[${task_id}] ${e.done ? `已结束(code=${e.exitCode})` : "运行中"}\n${truncate(tail) || "(无输出)"}`
+    const done = e ? (e.done ? `已结束(code=${e.exitCode})` : "运行中") : (rec?.endedAt !== undefined ? "已结束" : "状态未知（网关重启过）")
+    return `[${task_id}] ${done}\n${truncate(tail) || "(无输出)"}`
   },
 })
+
+/** T91 读文件护栏：超过这个大小不再整读（避免一个几百 MB 的日志把进程撑爆） */
+const MAX_READ_BYTES = 8 * 1024 * 1024
+
+/** 只读文件头部固定长度（不把整个文件读进内存） */
+function readHead(p: string, bytes: number): Buffer {
+  const fd = openSync(p, "r")
+  try {
+    const buf = Buffer.allocUnsafe(bytes)
+    const n = readSync(fd, buf, 0, bytes, 0)
+    return buf.subarray(0, n)
+  } finally {
+    closeSync(fd)
+  }
+}
 
 export const readTool = tool({
   description: "读取本地文件内容（文本，UTF-8）。相对路径基于当前工作目录。",
@@ -190,14 +272,37 @@ export const readTool = tool({
   async execute({ file_path, offset, limit }) {
     const p = resolve(currentCwd(), file_path)
     if (!existsSync(p)) return `文件不存在: ${p}`
-    const lines = readFileSync(p, "utf8").split(/\r?\n/)
+    let st: ReturnType<typeof statSync>
+    try {
+      st = statSync(p)
+    } catch (e) {
+      return `[失败] 无法访问 ${p}：${(e as Error).message}`
+    }
+    // T91：目录要明确报错——历史版本直接 readFileSync 会抛 EISDIR，
+    // 异常被 AI SDK 收成 tool-error，界面上连结果卡片都不出现，用户只看到步骤卡住
+    if (st.isDirectory()) return `[失败] 这是目录不是文件：${p}（用 glob 找文件、grep 搜内容，或 bash 列目录）`
+    const oversized = st.size > MAX_READ_BYTES
+    let text: string
+    try {
+      // 超大文件只读前 8MB（走 fd 读固定长度，不整读进内存）：能定位就用 grep，别整读
+      const buf = oversized ? readHead(p, MAX_READ_BYTES) : readFileSync(p)
+      // 二进制探测：前 8KB 出现 NUL 字节（UTF-16 文本也会命中）——按二进制拒读，避免回一屏乱码
+      if (buf.subarray(0, 8192).includes(0)) {
+        return `[失败] 疑似二进制文件（含 NUL 字节）：${p}（如确为 UTF-16 文本，请用 bash 转码后再读）`
+      }
+      text = buf.toString("utf8")
+    } catch (e) {
+      return `[失败] 读取失败：${(e as Error).message}`
+    }
+    const lines = text.split(/\r?\n/)
     const start = Math.max(0, (offset ?? 1) - 1)
     const end = Math.min(lines.length, start + (limit ?? 2000))
     const body = lines
       .slice(start, end)
       .map((l, i) => `${start + i + 1}: ${l}`)
       .join("\n")
-    return truncate(body || "(空文件)")
+    const head = oversized ? `[提示] 文件 ${(st.size / 1024 / 1024).toFixed(1)}MB，本次只读取前 8MB；精读请先 grep 定位再配合 offset\n` : ""
+    return truncate(head + (body || "(空文件)"))
   },
 })
 
@@ -208,9 +313,22 @@ export const writeTool = tool({
     content: z.string().describe("完整文件内容"),
   }),
   async execute({ file_path, content }) {
-    const p = resolve(currentCwd(), file_path)
+    const cwd = currentCwd()
+    const p = resolve(cwd, file_path)
     const mode = effectivePermission()
-    const rejection = await gate({ tool: "write", summary: p, danger: false, mode, broker: toolCtx.getStore()?.broker })
+    // T90：工作区外的写盘按危险操作处理——历史版本 write/edit 恒传 danger:false，
+    // 默认「危险确认」档下往 ~/.yyagent/config.json、系统目录等任意绝对路径静默覆盖都不问一声。
+    // 授权按「目录」粒度记：同一目录第二次起免问，不至于逐次确认把正常用起来变成折磨。
+    // T93：判定逻辑抽到 permissions.ts 的 gateFileWrite——同一套规则不能有两份
+    // （sceneTools 的 xlsx_write/docx_write/imggen/videogen 原来就是因为各写各的才漏掉）。
+    const rejection = await gateFileWrite({
+      tool: "write",
+      target: p,
+      cwd,
+      mode,
+      broker: toolCtx.getStore()?.broker,
+      sessionId: toolCtx.getStore()?.sessionId,
+    })
     if (rejection) return rejection
     // D6 撤销支持：写盘前采集快照（write 新建 = snapshot null，撤销时删除）
     trackFileChange(toolCtx.getStore()?.sessionId, p, "write")
@@ -229,9 +347,19 @@ export const editTool = tool({
     replace_all: z.boolean().optional().describe("替换所有匹配，默认只替换第一处"),
   }),
   async execute({ file_path, old_string, new_string, replace_all }) {
-    const p = resolve(currentCwd(), file_path)
+    const cwd = currentCwd()
+    const p = resolve(cwd, file_path)
     const mode = effectivePermission()
-    const rejection = await gate({ tool: "edit", summary: p, danger: false, mode, broker: toolCtx.getStore()?.broker })
+    // T90：同 write —— 工作区外的编辑按危险操作处理，授权按目录粒度记
+    // T93：走 gateFileWrite（与 write、sceneTools 共用同一套判定）
+    const rejection = await gateFileWrite({
+      tool: "edit",
+      target: p,
+      cwd,
+      mode,
+      broker: toolCtx.getStore()?.broker,
+      sessionId: toolCtx.getStore()?.sessionId,
+    })
     if (rejection) return rejection
     if (!existsSync(p)) return `文件不存在: ${p}`
     const content = readFileSync(p, "utf8")
@@ -426,7 +554,7 @@ export const websearchTool = tool({
 
 export const dbSaveTool = tool({
   description:
-    "把持久信息写入场景数据库（~/.yyagent/db/，跨会话永久保存）。可用库：notes（笔记：title/content）、contacts（联系人·搭子：name/type/contact/note）、knowledge（知识片段：topic/content/source）。用户说「记一下/存到库里/记住这个联系人」时使用。返回带 id，可用于更新或删除。",
+    "把持久信息写入场景数据库（~/.yyagent/db/，跨会话永久保存；库名与字段见系统提示词「场景数据库」节）。用户说「记一下/存到库里/记住这个联系人」时使用。返回带 id，可用于更新或删除。",
   inputSchema: z.object({
     db: z.string().describe("库名：notes / contacts / knowledge"),
     record: z.record(z.string(), z.unknown()).describe("记录字段对象，如 {title, content}；带 id 表示更新已有记录"),
@@ -469,6 +597,23 @@ export const dbQueryTool = tool({
 
 // ---------- 多智能体 ----------
 
+/**
+ * T93 P3：子代理结果的收口。
+ *
+ * 用满步数上限时**必须说清是截断**——否则主代理会把半截结果当成结论，
+ * 于是要么基于不完整的信息继续跑，要么反复重派同一个任务。
+ * 抽成纯函数是为了能单测（这段文案是给模型看的，写错字的代价是它理解错）。
+ */
+export function subagentResult(text: string, steps: number, cap: number): string {
+  const body = (text ?? "").trim()
+  if (steps < cap || cap <= 0) return body || "（子任务没有产出内容）"
+  return (
+    `${body || "（子任务没有产出内容）"}\n\n---\n` +
+    `[注意] 子任务已用完全部 ${cap} 步上限而停止，上面的内容**可能不完整**，` +
+    `不要把它当作最终结论。可把任务拆小后重派，或调大 config.subagentMaxSteps（当前 ${cap}）。`
+  )
+}
+
 export const delegateTool = tool({
   description:
     "把独立子任务派发给专家子智能体并行执行。可用角色：researcher（研究）、explore（只读探索）、coder（编码）、reviewer（审查），以及 ~/.yyagent/agents/ 下的自定义角色。一次回复中可发多个 delegate 调用实现并行。子智能体只回传结论，不占主上下文。",
@@ -488,9 +633,24 @@ export const delegateTool = tool({
     const tools = p.tools?.length
       ? ({ ...Object.fromEntries(p.tools.map((t) => [t, base[t]]).filter(([, v]) => v)), ...memoryTools(), ...makeTodoTool() } as Record<string, Tool>)
       : base
+    // T93：子代理原来只拿到 cwd —— 主循环 abort 后它照跑、它的权限确认问不到人、
+    // todo_write 还会落到全局 ~/.yyagent/todo.json 污染别的会话。四项上下文一起透传。
+    const store = toolCtx.getStore()
+    // T93 P3：步数上限原来硬编码 30，而主代理是 config.maxSteps ?? 50——
+    // 子任务更容易被截断，且截断后**静默**返回：主代理分不清它是做不完还是做错了。
+    // 现在可配（默认仍 30，不改变现状），且用满时明确标注。
+    const cap = loadConfig().subagentMaxSteps ?? 30
     try {
-      const r = await runAgent(task, { system: p.system, tools, maxSteps: 30, cwd: currentCwd() })
-      return r.text
+      const r = await runAgent(task, {
+        system: p.system,
+        tools,
+        maxSteps: cap,
+        cwd: currentCwd(),
+        signal: store?.signal,
+        sessionId: store?.sessionId,
+        broker: store?.broker,
+      })
+      return subagentResult(r.text, r.steps, cap)
     } catch (e) {
       return `[子任务失败] ${(e as Error).message}`
     }
@@ -512,7 +672,12 @@ export function makeTools(opts: ToolOptions = {}): Record<string, Tool> {
     t.edit = editTool
     // T44 桌面操控：截屏识图 / 移动鼠标 / 点击 / 输入 / 按键 / 滚动 / 聚焦窗口
     // 走工厂注入，让 computer 模块按当前会话权限档位提问（避免 tools ↔ computer 循环依赖）
-    t.computer = makeComputerTool({ permission: effectivePermission, broker: () => toolCtx.getStore()?.broker })
+    // T90：补 sessionId——桌面操控按会话授权一次（见 computer.ts 的 grantScope）
+    t.computer = makeComputerTool({
+      permission: effectivePermission,
+      broker: () => toolCtx.getStore()?.broker,
+      sessionId: () => toolCtx.getStore()?.sessionId,
+    })
   }
   t.read = readTool
   t.glob = globTool
@@ -532,6 +697,11 @@ export function makeTools(opts: ToolOptions = {}): Record<string, Tool> {
   if (opts.allowDelegate) t.delegate = delegateTool
   // T66 钩子：包装每个工具——执行完后跑启用的钩子检查（每完成一步检查一次），不通过则把
   // 修正提示追加进工具结果（模型下一步自纠）。runHooksOnTool fail-open，钩子出错不阻断主流程。
+  // T89 输出卸载（对标 deepagents context offloading）：超长工具输出落盘 .agent-outputs/，
+  // 上下文只留前 800 字符 + 文件句柄——长任务不再被巨量输出撑爆上下文。read/bg_read 除外
+  // （read 的输出就是模型要的内容，卸载了等于让它原地再读一遍死循环）。
+  const OFFLOAD_EXCLUDE = new Set(["read", "bg_read"])
+  const OFFLOAD_CHARS = 3000
   for (const k of Object.keys(t)) {
     const tool = t[k]
     if (typeof tool.execute !== "function") continue
@@ -539,12 +709,23 @@ export function makeTools(opts: ToolOptions = {}): Record<string, Tool> {
     t[k] = {
       ...tool,
       execute: async (input: never, options: never) => {
-        const out = await orig(input, options)
+        let out = await orig(input, options)
         try {
-          return await runHooksOnTool(k, out as string)
-        } catch {
-          return out
-        }
+          out = await runHooksOnTool(k, out as string)
+        } catch { /* 钩子失败保留原输出 */ }
+        try {
+          if (typeof out === "string" && out.length > OFFLOAD_CHARS && !OFFLOAD_EXCLUDE.has(k)) {
+            const c = toolCtx.getStore()?.cwd
+            if (c) {
+              const dir = join(c, ".agent-outputs")
+              mkdirSync(dir, { recursive: true })
+              const f = join(dir, `${Date.now()}-${k}.txt`)
+              writeFileSync(f, out)
+              out = out.slice(0, 800) + `\n\n[输出过长已卸载：完整内容（${out.length} 字符）存于 ${f}，需要时用 read 工具读取]`
+            }
+          }
+        } catch { /* 卸载失败原样返回 */ }
+        return out
       },
     } as typeof tool
   }

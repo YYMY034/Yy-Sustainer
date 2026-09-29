@@ -13,7 +13,7 @@ import { loadPlugins, type LoadedPlugin } from "../plugins/loader.js"
 import { loadMcpTools } from "../mcp/client.js"
 import { broker } from "../agent/ask.js"
 import { SIDE_PROTOCOL } from "../agent/side-protocol.js"
-import { readTodo, type TodoItem } from "../agent/todo.js"
+import { readTodo, todoPrompt, type TodoItem } from "../agent/todo.js"
 import { isImageFile, describeImage, readTextAttachment, attachmentExists, mainModelSupportsImages } from "../agent/vision.js"
 import {
   createSession,
@@ -25,6 +25,16 @@ import {
   type SessionMeta,
   type StoredMessage,
 } from "../session/store.js"
+// T93 P1 轮内 checkpoint：TUI 与网关共用同一套模块与阈值
+import {
+  CHECKPOINT_EVERY_MS,
+  CHECKPOINT_EVERY_STEPS,
+  CHECKPOINT_MIN_GAP_MS,
+  saveCheckpoint,
+  clearCheckpoint,
+  listCheckpoints,
+  describeCheckpoint,
+} from "../session/checkpoint.js"
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs"
 import { countTokens } from "gpt-tokenizer"
 import stringWidth from "string-width"
@@ -189,6 +199,9 @@ export function App(): React.ReactElement {
   const sendRef = useRef<((text: string) => Promise<void>) | null>(null)
   const handleCommandRef = useRef<((text: string) => Promise<void>) | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  /** T93 P1：流式正文的同步镜像。setStreaming 是 state、回调里读不到最新值，
+   *  而 checkpoint 要按定时器写 → 必须有一份 ref 存 accumulative 文本 */
+  const streamedTextRef = useRef("")
   const scrollDraggingRef = useRef(false)
   const messagesLenRef = useRef(0)
   useEffect(() => {
@@ -292,6 +305,20 @@ export function App(): React.ReactElement {
       setSessions([meta])
       setActive(meta)
     }
+    // T93 P1 断点恢复：启动时报告上次进程被杀留下的未完成回合。只报告不自动恢复。
+    try {
+      const cps = listCheckpoints()
+      if (cps.length) {
+        setNotice(
+          `发现 ${cps.length} 个未完成的回合（上次进程被中断）：` +
+            `${cps.slice(0, 3).map((c) => `${c.title || c.sessionId}（${describeCheckpoint(c)}）`).join("；")}` +
+            `。请到对应会话确认。`,
+        )
+        setTimeout(() => setNotice(""), 12000)
+      }
+    } catch {
+      /* 扫描失败不影响启动 */
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -370,9 +397,11 @@ export function App(): React.ReactElement {
           break
         }
         case "long": {
-          const on = !cfg.longTask
-          saveConfig({ ...cfg, longTask: on })
-          pushNotice(on ? "长任务模式已开启：上下文超 60% 自动滚动压缩（保留结论，剔除过程细节）" : "长任务模式已关闭：90% 兜底压缩")
+          // T93：开关存会话 meta（原来写 config.longTask —— 没人读的死配置，重启即失效）
+          if (!active) break
+          const on = !active.longTask
+          updateActive((m) => (m.longTask = on), messages)
+          pushNotice(on ? "长任务模式已开启：收敛时限放宽到 30 分钟" : "长任务模式已关闭：恢复默认收敛时限")
           break
         }
         case "watch": {
@@ -465,9 +494,37 @@ export function App(): React.ReactElement {
           }
           break
         }
-        case "mcp":
-          pushNotice(mcpInfo ? `MCP: ${mcpInfo} · 配置: ~/.yyagent/config.json 的 mcpServers` : "无 MCP server · 配置 mcpServers: { 名: { command, args } }")
+        case "mcp": {
+          // 白皮书 10.29：/mcp 无参 = 连接信息 + 本会话加载开关状态；on/off/auto = 三态手动控制
+          const conn = mcpInfo ? `MCP: ${mcpInfo} · 配置: ~/.yyagent/config.json 的 mcpServers` : "无 MCP server · 配置 mcpServers: { 名: { command, args } }"
+          const cur = active?.mcpOn
+          const state =
+            cur === true ? "已开启（本会话每轮都加载浏览器工具）"
+            : cur === false ? "已关闭（本会话不加载）"
+            : "自动（提到浏览器/网页/网址/链接的回合才加载）"
+          if (!args[0]) {
+            pushNotice(`${conn}\n浏览器工具加载: ${state}（/mcp on | off | auto）`)
+            break
+          }
+          if (args[0] === "auto") {
+            if (active) updateActive((m) => { delete m.mcpOn }, messages)
+            pushNotice("浏览器工具已回到自动：提到浏览器/网页/链接的回合才加载")
+            break
+          }
+          if (args[0] !== "on" && args[0] !== "off") {
+            pushNotice("用法: /mcp [on|off|auto]（不带参数看连接信息与当前开关）")
+            break
+          }
+          if (!active) break
+          const on = args[0] === "on"
+          updateActive((m) => (m.mcpOn = on), messages)
+          pushNotice(
+            on
+              ? "浏览器工具已开启：本会话每轮都加载（35 个工具 ≈ 每步多 4.3k token）"
+              : "浏览器工具已关闭：本会话不加载（想改回按意图自动用 /mcp auto）",
+          )
           break
+        }
         case "mousedbg": {
           const stdin = process.stdin as unknown as { isTTY?: boolean; isRaw?: boolean; listenerCount: (e: string) => number }
           pushNotice(
@@ -689,6 +746,7 @@ export function App(): React.ReactElement {
       updateActive(metaMut, msgs)
       setBusy(true)
       setBusyStatus("思考中")
+      streamedTextRef.current = ""
       setStreaming("")
       setScrollOffset(0)
       setRunSteps([])
@@ -696,7 +754,57 @@ export function App(): React.ReactElement {
       setStepSel(0)
       const ac = new AbortController()
       abortRef.current = ac
+      // T93 P3 预算熔断·前置：与网关同一配置、同一语义。已超限就一个 token 都不花。
+      const sessionBudget = loadConfig().sessionTokenBudget ?? 0
+      const usedBefore = (active.usage?.in ?? 0) + (active.usage?.out ?? 0)
+      if (sessionBudget > 0 && usedBefore >= sessionBudget) {
+        pushNotice(`已达本会话 token 预算（${usedBefore.toLocaleString()}/${sessionBudget.toLocaleString()}）。调大 config.sessionTokenBudget 或新建会话后继续。`)
+        return
+      }
+      // T93 P2 交互轮总超时（与网关同一配置、同一语义；默认 0 = 不限）
+      const interactiveTimeoutMs = loadConfig().interactiveTimeoutMs ?? 0
+      let timedOut = false
+      /** T93 P3：本轮真实消耗的 token（每步累加）与熔断标记——和中止/超时同一个理由：
+       *  不走累计的话，被熔断的那一轮花掉的 token 永远记不进账，预算就拦不住第二次。 */
+      let turnTokens = { in: 0, out: 0 }
+      let budgetStopped = false
+      const turnTimeout =
+        interactiveTimeoutMs > 0
+          ? setTimeout(() => {
+              timedOut = true
+              setBusyStatus(`已超时（${Math.round(interactiveTimeoutMs / 1000)} 秒），正在收尾`)
+              ac.abort(new Error(`interactive-timeout:${interactiveTimeoutMs}`))
+            }, interactiveTimeoutMs)
+          : undefined
       const injected = active.title === CONFIG_TITLE ? `${CONFIG_CONTEXT}\n\n---\n用户说：${text}` : text
+      // T93 P1 轮内 checkpoint：TUI 的回合原来也只有开头和结尾落库，进程被杀就只剩用户消息。
+      // 与网关同一套模块 / 同一套阈值，保证两条入口行为一致。
+      let cpCompacted: Array<{ role: "user" | "assistant"; content: string; ts: number }> | undefined
+      let cpSteps = 0
+      let cpLastMs = Date.now()
+      const writeCp = (): void => {
+        cpLastMs = Date.now()
+        cpSteps = 0
+        saveCheckpoint({
+          sessionId: active.id,
+          title: active.title,
+          cwd: active.cwd,
+          userTs: userMsg.ts,
+          userText: text.trim(),
+          images: directImages?.length ?? 0,
+          startedAt: Date.now(),
+          updatedAt: Date.now(),
+          streamedText: streamedTextRef.current,
+          steps: runStepsRef.current.map((s) => ({ name: s.name, argsSummary: s.argsSummary, input: s.input, output: s.output })),
+          compactedStored: cpCompacted,
+          model: active.model,
+        })
+      }
+      writeCp()
+      const cpTimer = setInterval(() => {
+        if (Date.now() - cpLastMs < CHECKPOINT_MIN_GAP_MS) return
+        writeCp()
+      }, CHECKPOINT_EVERY_MS)
       let r: import("../agent/loop.js").AgentResult | null = null
       try {
         const history = toCoreMessages(messages)
@@ -713,10 +821,43 @@ export function App(): React.ReactElement {
                 cwd: active.cwd,
                 signal: ac.signal,
                 images: directImages.length ? directImages : undefined,
+                // T93：原来没传 sessionId —— TUI 里的 todo_write 会落到全局 ~/.yyagent/todo.json，
+                // 和别的会话互相覆盖。会话隔离靠的就是它。
+                sessionId: active.id,
+                // T93：长任务模式（存会话 meta）放宽收敛时限
+                convergeTimeoutMs: active.longTask ? 30 * 60_000 : undefined,
+                lastInputTokens: active.lastInputTokens,
+                // MCP 浏览器工具手动开关（存会话 meta）：undefined = 按意图自动（白皮书 10.29）。
+                // 意图判定跑原始输入 text，不跑 injected（配置会话的上下文里出现「网页」
+                // 不该让这一轮背上 33 个浏览器工具）
+                mcpOn: active.mcpOn,
+                mcpText: text,
+                // T93 P3：与网关同一份 todoPrompt()——不注入的话 TUI 里的长任务同样读不回自己的计划
+                systemSuffix: todoPrompt(active.id) || undefined,
               },
               {
-                onText: (d) => setStreaming((s) => (s ?? "") + d),
+                onText: (d) => {
+                  streamedTextRef.current += d
+                  setStreaming((s) => (s ?? "") + d)
+                },
                 onStatus: (s) => setBusyStatus(s),
+                // T93 P2：「第 N/M 步」——loop 一直在报，之前没接所以看不到进度
+                // T93 P3：轮内累计 token + 预算熔断（与网关同一配置、同一语义）
+                onStep: ({ step, maxSteps, tools, inputTokens, outputTokens }) => {
+                  turnTokens.in += inputTokens
+                  turnTokens.out += outputTokens
+                  if (sessionBudget > 0 && !budgetStopped && usedBefore + turnTokens.in + turnTokens.out >= sessionBudget) {
+                    budgetStopped = true
+                    pushNotice(`已达本会话 token 预算（${(usedBefore + turnTokens.in + turnTokens.out).toLocaleString()}/${sessionBudget.toLocaleString()}），已停止。`)
+                    ac.abort(new Error(`budget-exceeded:${sessionBudget}`))
+                    return
+                  }
+                  setBusyStatus(`第 ${step}/${maxSteps} 步${tools.length ? ` · ${tools.join(",")}` : ""}`)
+                },
+                // T93：压缩结果交给 checkpoint 带上（中断恢复时不丢这一轮的压缩成果）
+                onCompactedStored: (stored) => {
+                  cpCompacted = stored.map((m) => ({ role: m.role, content: m.content, ts: m.ts }))
+                },
                 onToolEvent: (ev) => {
                   setRunSteps((prev) => {
                     if (ev.type === "call") {
@@ -742,6 +883,11 @@ export function App(): React.ReactElement {
                     next[i] = { ...next[i], output, pending: false }
                     return next
                   })
+                  // T93 P1：一步工具出结果就计入一次（够步数且过了最小间隔才真写盘）
+                  if (ev.type === "result") {
+                    cpSteps++
+                    if (cpSteps >= CHECKPOINT_EVERY_STEPS && Date.now() - cpLastMs >= CHECKPOINT_MIN_GAP_MS) writeCp()
+                  }
                 },
               },
             )
@@ -763,16 +909,38 @@ export function App(): React.ReactElement {
         if (usage) {
           setTokenStats((s) => ({ in: s.in + usage.in, out: s.out + usage.out, cached: s.cached + usage.cached }))
         }
-        msgs = [...msgs, {
+        // T93：本轮若发生过压缩，落库历史改用「滚动摘要 + 保留的最近消息」——
+        // 原来固定用原始 msgs，压缩结果每轮被丢掉、下轮从全量重压
+        msgs = [...(r.compactedStored ?? msgs), {
           role: "assistant",
-          content: r.text,
+          // T93 P2：abort 会让 r.text 为空，超时也要和「用户停止」区分开
+          content: timedOut
+            ? (r.text.trim() ? `${r.text}\n\n---\n（已超时停止，以上是超时前已产出的部分）` : "（已超时停止，未输出内容）")
+            : r.text,
           ts: Date.now(),
           steps: runStepsRef.current.map((s) => ({ name: s.name, argsSummary: s.argsSummary, input: s.input, output: s.output })),
         }]
         setMessages(msgs)
         const pct = calcCtxPct(msgs)
         setCtxPct(pct)
-        updateActive((m) => (m.ctxPct = pct), msgs)
+        if (r.compactedStored) pushNotice("上下文已压缩：历史压成滚动摘要 + 最近几条")
+        updateActive((m) => {
+          m.ctxPct = pct
+          // T93：记下真实输入量，供下一轮压缩判定做下限
+          if (r?.usage?.in) m.lastInputTokens = r.usage.in
+          // T93 P3：用轮内累计而不是 r.usage——被熔断/中止时 r.usage 是 0，
+          // 不累计就永远记不进账，预算拦不住第二次
+          if (turnTokens.in || turnTokens.out) {
+            const u = m.usage ?? { in: 0, out: 0, cached: 0, turns: 0, steps: 0 }
+            m.usage = {
+              in: u.in + (turnTokens.in || r?.usage?.in || 0),
+              out: u.out + (turnTokens.out || r?.usage?.out || 0),
+              cached: u.cached + (r?.usage?.cached ?? 0),
+              turns: u.turns + 1,
+              steps: u.steps + (r?.steps ?? 0),
+            }
+          }
+        }, msgs)
         setCtxPct(calcCtxPct(msgs))
       } catch (e) {
         setRetryInfo(null)
@@ -786,6 +954,12 @@ export function App(): React.ReactElement {
           updateActive(metaMut, msgs)
         }
       } finally {
+        // T93 P1：回合收尾（成功/出错/停止都算）→ checkpoint 清掉；没走到这里才是「真中断」
+        clearInterval(cpTimer)
+        clearCheckpoint(active.id)
+        // T93 P2：超时定时器一并清掉
+        if (turnTimeout) clearTimeout(turnTimeout)
+        streamedTextRef.current = ""
         abortRef.current = null
         setStreaming(null)
         setBusy(false)
@@ -979,7 +1153,8 @@ export function App(): React.ReactElement {
   )
   actRef.current = act
 
-  const longTaskOn = loadConfig().longTask ?? false
+  // T93：读会话自身的开关（原来读 config.longTask —— 死配置，改它不影响任何行为）
+  const longTaskOn = active?.longTask ?? false
   const mouseOn = isMouseEnabled()
   const ctxLabel = `${ctxPct >= 75 ? "🔴" : ctxPct >= 40 ? "🟡" : "🟢"} ${ctxPct}%`
   const ctxDesc = `上下文占用 ${ctxPct}%，点击一键压缩 · 本会话 ↑${fmtK(tokenStats.in)} ↓${fmtK(tokenStats.out)} tok · 缓存命中 ${tokenStats.in ? Math.round((tokenStats.cached / tokenStats.in) * 100) : 0}%`
@@ -991,7 +1166,7 @@ export function App(): React.ReactElement {
         { label: "▭ 右栏", act: "sidepanel", desc: "右侧栏：辅助对话/任务管理（Ctrl+R）" },
         { label: "☰ 队列", act: "queue", desc: "查看排队消息（Ctrl+J/K 浏览 · Ctrl+E 编辑）" },
         { label: mouseOn ? "🖱 鼠标✓" : "🖱 鼠标✗", act: "mouse", desc: "鼠标模式开关（Ctrl+M）：开=点按钮/提示（Shift拖选复制），关=终端原生选择" },
-        { label: longTaskOn ? "⏳ 长任务✓" : "⏳ 长任务✗", act: "long", desc: "长任务模式（/long）：上下文超 60% 自动滚动压缩" },
+        { label: longTaskOn ? "⏳ 长任务✓" : "⏳ 长任务✗", act: "long", desc: "长任务模式（/long）：收敛时限放宽到 30 分钟（存本会话，重启不丢）" },
         { label: "⊕ 权限", act: "perm", desc: "循环切换权限档位（/perm）" },
         { label: "? 帮助", act: "help", desc: "全部命令说明（/help）" },
         { label: "✕ 退出", act: "exit", desc: "退出 Yy Sustainer（Ctrl+C）" },
@@ -1006,7 +1181,7 @@ export function App(): React.ReactElement {
         { label: "⟡ 辅助", act: "side", desc: "后台辅助对话/子代理（/side <任务>），不打断当前对话" },
         { label: "▭ 右栏", act: "sidepanel", desc: "右侧栏：辅助对话/任务管理（Ctrl+R）" },
         { label: mouseOn ? "🖱 鼠标✓" : "🖱 鼠标✗", act: "mouse", desc: "鼠标模式开关（Ctrl+M）" },
-        { label: longTaskOn ? "⏳ 长任务✓" : "⏳ 长任务✗", act: "long", desc: "长任务模式（/long）：上下文超 60% 自动滚动压缩" },
+        { label: longTaskOn ? "⏳ 长任务✓" : "⏳ 长任务✗", act: "long", desc: "长任务模式（/long）：收敛时限放宽到 30 分钟（存本会话，重启不丢）" },
         { label: "⊕ 权限", act: "perm", desc: "循环切换权限档位（/perm）" },
         { label: "? 帮助", act: "help", desc: "全部命令说明（/help）" },
         { label: "✕ 退出", act: "exit", desc: "退出 Yy Sustainer（Ctrl+C）" },
@@ -1316,6 +1491,11 @@ export function App(): React.ReactElement {
             history: toCoreMessages(prev),
             system: injected,
             signal: ac2.signal,
+            // 辅助对话同样是独立会话——MCP 手动开关用它自己的 meta（白皮书 10.29）。
+            // **mcpText 传原始输入**：injected 里拼了主对话最近输出，主对话在干浏览器活时
+            // 不该让辅助对话每轮都误加载 33 个工具
+            mcpOn: target.mcpOn,
+            mcpText: text,
           },
           { onText: (d) => setSideStreaming((s) => (s ?? "") + d) },
         )

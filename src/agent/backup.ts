@@ -1,0 +1,78 @@
+// T83 数据资产自动备份：把 ~/.yyagent 的核心资产（会话/记忆/场景库/todo/配置/用量账本）
+// 压缩到 ~/.yyagent/backups/，滚动保留 N 份。用系统自带 tar（Win10+ 内置，-a 按扩展名出 zip）。
+import { spawn } from "node:child_process"
+import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
+import { loadConfig } from "./config.js"
+
+const ROOT = join(homedir(), ".yyagent")
+const BACKUP_DIR = join(ROOT, "backups")
+/** 纳入备份的条目（相对 ~/.yyagent；不存在的自动跳过）
+ *  T91：定时任务已从安装目录的 yyagentd.config.json 搬到 tasks.json（见 taskstore.ts），
+ *  备份清单跟着改——否则备份里永远没有定时任务，「文件式一切可带走」对它是破的。
+ *  注意 .master.key 也在这里面：它是 DPAPI 保护的（绑定当前 Windows 用户），
+ *  备份包换机器/换用户都解不开，所以带进备份不会降低密钥保护强度。 */
+const ITEMS = ["sessions", "memory", "db", "todo", "bin", "config.json", "tasks.json", "usage.jsonl", "usage-backfill.json", ".master.key"]
+
+export interface BackupInfo { file: string; name: string; size: number; mtime: number }
+
+export function listBackups(): BackupInfo[] {
+  try {
+    if (!existsSync(BACKUP_DIR)) return []
+    return readdirSync(BACKUP_DIR)
+      .filter((f) => f.startsWith("backup-") && f.endsWith(".zip"))
+      .map((f) => {
+        const st = statSync(join(BACKUP_DIR, f))
+        return { file: f, name: f, size: st.size, mtime: st.mtimeMs }
+      })
+      .sort((a, b) => b.mtime - a.mtime)
+  } catch {
+    return []
+  }
+}
+
+/** 立即执行一次备份；成功返回文件名，失败抛错（调用方决定是否静默） */
+export function runBackupNow(): Promise<BackupInfo> {
+  const keep = Math.max(1, loadConfig().backup?.keep ?? 14)
+  mkdirSync(BACKUP_DIR, { recursive: true })
+  const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19)
+  const out = join(BACKUP_DIR, `backup-${stamp}.zip`)
+  const items = ITEMS.map((i) => join(ROOT, i)).filter((p) => existsSync(p))
+  if (!items.length) return Promise.reject(new Error("没有可备份的内容"))
+  return new Promise((resolve, reject) => {
+    // tar -a：按 .zip 扩展名自动用 zip 格式；-C 把根切到 ~/.yyagent，条目用相对路径。
+    // 必须用 System32 的 bsdtar——PATH 里可能排到 Git 的 GNU tar，它把 C:\ 当远程主机（坑 86）
+    const tarBin = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")
+    const p = spawn(tarBin, ["-a", "-c", "-f", out, "-C", ROOT, ...items.map((i) => i.slice(ROOT.length + 1))], { windowsHide: true })
+    let err = ""
+    p.stderr?.on("data", (d) => { err += String(d) })
+    p.on("error", reject)
+    p.on("exit", (code) => {
+      if (code !== 0) { try { unlinkSync(out) } catch { /* 忽略 */ } return reject(new Error(err.slice(0, 300) || `tar 退出码 ${code}`)) }
+      try {
+        // 滚动保留：超出 keep 的最旧备份删除
+        const all = listBackups()
+        for (const old of all.slice(keep)) { try { unlinkSync(join(BACKUP_DIR, old.file)) } catch { /* 忽略 */ } }
+        const st = statSync(out)
+        resolve({ file: out, name: out.split(/[\\/]/).pop()!, size: st.size, mtime: st.mtimeMs })
+      } catch (e) { reject(e as Error) }
+    })
+  })
+}
+
+/** 备份调度：由网关启动时调用——立即补一次（距上次超过间隔才真正跑），并挂小时级轮询 */
+export function startBackupSchedule(): void {
+  const tick = () => {
+    const cfg = loadConfig().backup
+    if (cfg?.enabled === false) return
+    const hours = Math.max(1, cfg?.intervalHours ?? 24)
+    const all = listBackups()
+    const last = all[0]?.mtime ?? 0
+    if (Date.now() - last >= hours * 3600_000) {
+      runBackupNow().catch(() => { /* 备份失败不影响网关 */ })
+    }
+  }
+  tick()
+  setInterval(tick, 3600_000).unref()
+}

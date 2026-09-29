@@ -68,7 +68,7 @@ export function makeAskTool(): Record<string, unknown> {
   return {
     ask: tool({
       description:
-        "向用户发起选择题或澄清提问（仅交互模式可用）。存在多条实现路径、需求有歧义、开始新项目时使用：给出 2-5 个候选项并标出推荐项，用户也可自由输入。一次一个问题；多个问题请分多次调用。",
+        "向用户发起选择题或澄清提问（仅交互模式可用；详细的问/不问判断见系统提示词「提问澄清」节）。一次一个问题；多个问题分多次调用。",
       inputSchema: z.object({
         question: z.string().describe("要问用户的问题，含必要的背景与各选项差异说明"),
         options: z.array(z.string()).min(2).max(5).optional().describe("候选项列表（2-5 个），每项一句话说清这条路径是什么"),

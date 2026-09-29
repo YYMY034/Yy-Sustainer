@@ -43,6 +43,39 @@ export function readTodo(sessionId?: string): TodoItem[] {
   }
 }
 
+/**
+ * T93 P3：把当前 todo 清单渲染成一段注入系统提示的文本。
+ *
+ * 为什么需要它：`todo_write` 是**唯一**的 todo 工具——**只有写，没有读**。
+ * 而它是全量覆盖语义，模型想「收回主线」只能凭记忆重写整个清单。
+ * 短任务无所谓；**长任务跑过 30 步之后记忆已经被压缩成一段摘要**，
+ * 于是模型实际上再也读不回自己定过的计划——这是长任务跑偏最直接的根源。
+ *
+ * 放在 `todo.ts` 而不是各自写在网关/TUI 里：两个入口都要注入，
+ * 抄两份迟早漂（config.longTask 的教训）。
+ */
+export function todoPrompt(sessionId?: string): string {
+  let items: TodoItem[] = []
+  try {
+    items = readTodo(sessionId)
+  } catch {
+    return ""
+  }
+  if (!Array.isArray(items) || !items.length) return ""
+  const done = items.filter((i) => i && i.status === "done").length
+  const lines = items
+    .filter((i) => i && typeof i.content === "string")
+    .map((i) => `- [${i.status === "done" ? "x" : i.status === "in_progress" ? ">" : " "}] ${i.content}`)
+    .join("\n")
+  if (!lines) return ""
+  return (
+    `【当前任务计划】（${done}/${items.length} 已完成）\n` +
+    `${lines}\n` +
+    `以上是你此前用 todo_write 维护的清单的**当前真实状态**，不是历史记录。` +
+    `完成一步后直接用 todo_write 全量更新它；要调整计划也基于这份改，不要凭记忆重写。`
+  )
+}
+
 /** 写指定会话的 todo；items 为空数组 = 清除该会话 todo */
 export function writeTodo(sessionId: string, items: TodoItem[]): void {
   mkdirSync(TODO_DIR, { recursive: true })

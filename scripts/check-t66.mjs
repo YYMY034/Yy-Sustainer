@@ -9,6 +9,8 @@ const script = html.match(/<script>([\s\S]*?)<\/script>/)[1]
 const gateway = readFileSync('src/gateway.ts', 'utf8')
 const config = readFileSync('src/agent/config.ts', 'utf8')
 const hooksTs = readFileSync('src/agent/hooks.ts', 'utf8')
+// T93 L1：判定逻辑搬到 hookJudge.ts 了，断言要跟着去那个文件
+const judgeTs = readFileSync('src/agent/hookJudge.ts', 'utf8')
 const tools = readFileSync('src/agent/tools.ts', 'utf8')
 const cssNoCmt = css.replace(/\/\*[\s\S]*?\*\//g, '')
 const rule = (sel) => {
@@ -35,20 +37,26 @@ ok('BUILTIN_HOOKS 定义在 config（防循环导入：hooks.ts 从 config 导�
 
 console.log('=== ② hooks.ts：fail-open 检查器 ===')
 ok('runHooksOnTool：只查启用的钩子', /filter\(\(h\) => h\.enabled\)/.test(hooksTs))
-ok('超时上限（25s）+ 长输出截断（2000 字符）', /CHECK_TIMEOUT_MS = 25000/.test(hooksTs) && /SAMPLE_CHARS = 2000/.test(hooksTs))
-// T73 更新：判定从「行首 ^FAIL」改为「先剥 thinking 块 + 按关键字找 FAIL」，容模型多嘴
-ok('FAIL 解析（不通过才追加）', hooksTs.includes('thinking|think') && hooksTs.includes('FAIL[:：]?') && !hooksTs.includes('/^FAIL/i.test(txt)'))
-ok('fail-open：模型解析失败/无模型/钩子超时都原样返回', (hooksTs.match(/return output/g) || []).length >= 3)
+ok('超时上限（25s）+ 长输出截断（2000 字符）', /CHECK_TIMEOUT_MS = 25_000/.test(judgeTs) && /SAMPLE_CHARS = 2000/.test(hooksTs))
+// T93 L1：判定改为**按 hookId 精确匹配 + 行首锚定**——旧实现按 name 子串匹配，
+// 钩子名叫「安全钩子」和「安全检查」时第二条会命中第一条那一行，拿到别人的判定
+ok('FAIL 解析：按 hookId 精确匹配且行首锚定（不再按 name 子串）',
+  /const hook = byId\.get\(id\)/.test(judgeTs) && /\^\(/.test(judgeTs)
+  && /seen\.has\(id\)/.test(judgeTs)
+  // 只在**代码行**里找旧写法——注释里提到它是为了说明为什么改，不该算违规
+  && !judgeTs.split(/\r?\n/).filter((l) => !l.trim().startsWith("*") && !l.trim().startsWith("//")).some((l) => /includes\(h\.name\)/.test(l)))
+ok('fail-open：后端炸了/判不出/无启用钩子都原样返回', (hooksTs.match(/return output/g) || []).length >= 2 && /verdicts = \[\] \/\/ 后端炸了/.test(hooksTs))
 ok('FAIL 追加带「请立即修正后续行为」提示', /【钩子检查未通过】/.test(hooksTs) && /请立即修正后续行为/.test(hooksTs))
-ok('使用 chatModel（与 loop.ts 同款取模方式）', /client\.chatModel\(modelId\)/.test(hooksTs))
+// T93 L1：strict 钩子判不出时要提醒复核——旧实现「找不到行即按通过」对安全钩子方向是反的
+ok('strict 钩子：判定缺失时提醒自行复核（不是静默通过）',
+  /else if \(!v && h\.strict\)/.test(hooksTs) && /本次未能完成检查/.test(hooksTs)
+  && /strict: true/.test(config) && config.includes('builtin-safety'))
+ok('使用 chatModel（与 loop.ts 同款取模方式）', /client\.chatModel\(modelId\)/.test(judgeTs))
 
 console.log('=== ③ tools.ts：每步工具包装 ===')
-ok('makeTools 末尾包装全部工具（execute 后跑钩子）',
-  /if \(opts\.allowDelegate\) t\.delegate = delegateTool[\s\S]*?for \(const k of Object\.keys\(t\)\)/.test(tools) &&
-  /const out = await orig\(input, options\)/.test(tools))
+ok('makeTools 末尾包装全部工具（钩子+T89 卸载）', tools.includes('let out = await orig(input, options)') && tools.includes('.agent-outputs'))
 ok('包装调用 runHooksOnTool（工具名 + 输出）', /runHooksOnTool\(k, out as string\)/.test(tools))
-ok('包装自身 try/catch fail-open', /return await runHooksOnTool\(k, out as string\)[\s\S]{0,40}catch \{[\s\S]{0,20}return out/.test(tools))
-
+ok('包装 fail-open 双层 catch', tools.includes('钩子失败保留原输出') && tools.includes('卸载失败原样返回'))
 console.log('=== ④ gateway：/api/hooks 路由 + 思考失败文案 ===')
 ok('GET /api/hooks 列表', gateway.includes('if (m === "GET" && p === "/api/hooks") return json(res, 200, { hooks: loadConfig().hooks ?? [] })'))
 ok('toggle 开关持久化（saveConfig）', /p === "\/api\/hooks\/toggle"/.test(gateway) && /h\.enabled = !!body\.enabled/.test(gateway) && /saveConfig\(loadConfig\(\)\)/.test(gateway))
@@ -58,10 +66,15 @@ ok('delete 反向：内置钩子不可删除', /内置钩子不可删除，可�
 // 「思考失败」的可见反馈保留（挪到 !aborted 分支，且不再把真实错误误标成"已停止"）
 ok('思考失败与用户停止分流（改用 describeFailure().kind，真实报错不再被误判为已停止）',
   gateway.includes('aborted = dinfo.kind === "abort"') && !gateway.includes('/No output generated/i.test(err.message'))
+// T93 P3：silent 多了一个 !ctxCompacted 例外——走过上下文超限恢复的错误带着准确病因，
+// 不能被改写成「模型没有返回任何内容」（第一版实测：恢复跑了、提示被吞成一句废话）
 ok('思考失败且零步骤：落库可见提示（原来整条不落库）',
-  gateway.includes('思考失败：模型没有返回任何内容。可点击重新生成，或换个说法重试。') && gateway.includes('const silent = dinfo.kind === "unknown"'))
-ok('通知条只说「已停止」（思考失败改走 [出错] 落库路径，带真实原因）',
-  gateway.includes('broadcast({ type: "notice", sessionId, text: "已停止" })') && gateway.includes('`[出错] ${err.message}`'))
+  gateway.includes('思考失败：模型没有返回任何内容。可点击重新生成，或换个说法重试。')
+  && /const silent =\s*\n\s*dinfo\.kind === "unknown" && !streamedText\.trim\(\) && !steps\.length && !ctxCompacted/.test(gateway))
+// T93 P2：超时与用户停止分成两种通知条——都写「已停止」会让人以为是自己点了停止
+// T93 P3：现在是三岔——预算熔断 / 超时 / 用户主动停止。都写「已停止」会让人以为是自己点的
+ok('停止通知条区分「预算熔断 / 超时 / 用户停止」三种（思考失败改走 [出错] 落库路径，带真实原因）',
+  gateway.includes('text: budgetStopped') && gateway.includes('已达本会话 token 预算（') && gateway.includes('已超时停止（上限 ') && gateway.includes('`[出错] ${err.message}`'))
 
 console.log('=== ⑤ web：设置页钩子卡 ===')
 ok('设置导航含钩子类别', html.includes('data-sec="secHooks"'))

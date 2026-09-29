@@ -367,10 +367,12 @@
   /* T56 悬停提示：ⓘ 上浮深色说明浮层（纯 CSS；pointer-events:none 防浮层抢悬停闪烁） */
   .model-divider .ico .tip { display: none; position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); width: max-content; max-width: 250px; padding: 9px 13px; border-radius: 10px; background: var(--text); color: var(--bg); font-size: 12px; line-height: 1.6; text-align: center; box-shadow: 0 6px 20px var(--shadow); z-index: 40; pointer-events: none; }
   .model-divider .ico:hover .tip { display: block; }
-  /* P2-4 进度可见：todo 任务清单条（消息区下方，≥1 项才显示） */
-  #todoBar { display: none; margin: 0 22px; padding: 8px 12px 9px; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; }
+  /* P2-4 进度可见：todo 任务清单条（消息区下方，有任务就显示）——T86 卡片化：
+     柔投影 + 展开内容 todoUnfold 动画 + 有任务常驻（全部完成后 10s 才收拢为摘要条） */
+  #todoBar { display: none; margin: 0 22px; padding: 8px 12px 9px; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 3px 14px var(--shadow); }
   #todoBar.show { display: block; }
-  #todoBar.expanded #todoItems { display: block; }
+  #todoBar.expanded #todoItems { display: block; animation: todoUnfold .18s cubic-bezier(.22,.61,.36,1); }
+  @keyframes todoUnfold { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
   #todoBar.expanded #todoToggle { transform: rotate(180deg); }
   #todoHead { display: flex; align-items: center; gap: 8px; cursor: pointer; }
   #todoTitle { font-size: 12.5px; font-weight: 600; color: var(--text); }
@@ -453,6 +455,10 @@
   /* T49 朴素图表容器（chart 围栏渲染出的 SVG）：同代码块外壳，内容 100% 宽自适应 */
   .chartbox { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px; margin: 8px 0; }
   .chartbox svg { display: block; width: 100%; height: auto; }
+  /* 10.33 svg 围栏容器：模型手写 SVG 原样透传（净化后）。无 viewBox 的劣化 SVG 可能
+     横向溢出，给 overflow-x 兜底（与 pre.fence 一致） */
+  .svgbox { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px; margin: 8px 0; overflow-x: auto; }
+  .svgbox svg { display: block; width: 100%; height: auto; max-width: 100%; }
   .msg .meta { font-size: 11px; color: var(--dim); margin-top: 3px; }
   /* P1-6 用户消息右侧气泡：无名字标签，只有气泡本体 */
   .msg.user { display: flex; flex-direction: column; align-items: flex-end; position: relative; }
@@ -530,12 +536,10 @@
   details.steps summary:hover { color: var(--text); }
   details.steps pre { background: var(--panel2); border-radius: 6px; padding: 8px; margin: 4px 0; overflow-x: auto; font-size: 11px; }
   #streaming .body::after { content: "▌"; color: var(--dim); animation: blink 1s infinite; }
-  /* 思考中加载动画：模型名旁的三点跳动（发送后立即出现，首个字吐出后由 JS 隐藏） */
-  .thinkspin { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; vertical-align: middle; }
-  .thinkspin i { width: 5px; height: 5px; border-radius: 50%; background: var(--dim); animation: thinkbounce 1.2s infinite ease-in-out; }
-  .thinkspin i:nth-child(2) { animation-delay: .15s; }
-  .thinkspin i:nth-child(3) { animation-delay: .3s; }
-  @keyframes thinkbounce { 0%, 60%, 100% { transform: translateY(0); opacity: .4; } 30% { transform: translateY(-4px); opacity: 1; } }
+  /* 思考中动效（T87/T90）：shimmer 扫光文字——高光从左向右流过（left→right 扫过）。
+     状态行 shimmer 常驻（模型行不再另挂「思考中」），JS remove 点保留为无害空操作 */
+  .shimmer-text { display: inline-block; background: linear-gradient(90deg, var(--dim) 0%, var(--dim) 35%, var(--text) 50%, var(--dim) 65%, var(--dim) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; animation: shimmerSweep 1.6s linear infinite; }
+  @keyframes shimmerSweep { from { background-position: 200% 0 } to { background-position: -200% 0 } }
   @keyframes blink { 50% { opacity: 0; } }
   .empty { color: var(--dim); text-align: center; margin-top: 80px; }
 
@@ -614,9 +618,10 @@
 
   /* P0-4 活动流：一行行状态 + 点击展开可滚动小卡片 */
   #activity { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 6px; display: flex; flex-direction: column; gap: 2px; }
-  /* T57：执行中/思考中状态行——从顶栏挪进流式输出区（光标处）；无占位时（压缩中）才回落顶栏 */
-  .stream-status { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--warn); }
-  .stream-status .spinner { width: 12px; height: 12px; border: 2px solid color-mix(in srgb, var(--warn) 30%, transparent); border-top-color: var(--warn); border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
+  /* T57：执行中/思考中状态行——从顶栏挪进流式输出区（光标处）；无占位时（压缩中）才回落顶栏。
+     T87：圆形 spinner 去掉，状态文字本身 shimmer 扫光 */
+  .stream-status { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; }
+  .stream-status .shimmer-text { font-weight: 600; }
   .act-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); padding: 3px 6px; border-radius: 6px; cursor: pointer; user-select: none; }
   .act-line:hover { background: var(--panel); color: var(--text); }
   .act-line .spinner { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
@@ -755,6 +760,15 @@
   #addModelModal .ferr { color: var(--err); font-size: 12px; min-height: 16px; margin-bottom: 6px; }
   /* P0-7 权限总开关（复用模型下拉的样式语言） */
   #permBtn { background: transparent; color: var(--dim); border: none; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 5px; overflow: hidden; white-space: nowrap; }
+  /* T85 长任务模式按钮：平时只是个低调 chip，激活后 accent 描边提示「本轮放宽收敛」 */
+  #longTaskBtn { background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--dim); font: inherit; font-size: 11.5px; padding: 2px 9px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+  #longTaskBtn:hover { color: var(--text); }
+  #longTaskBtn.active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  /* 白皮书 10.29：浏览器工具三态按钮。auto=中性 / on=高亮 / off=暗色（手动关） */
+  #mcpBtn { background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--dim); font: inherit; font-size: 11.5px; padding: 2px 9px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+  #mcpBtn:hover { color: var(--text); }
+  #mcpBtn.active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  #mcpBtn.off { opacity: 0.55; }
   #permBtn:hover, #permBtn.open { color: var(--text); }
   #permBtn .picon { font-size: 12px; display: inline-flex; align-items: center; }
   #permBtn.full-auto .picon { color: var(--user); }
@@ -804,6 +818,18 @@
   #olderBtn { display: block; margin: 0 auto 14px; background: var(--panel2); color: var(--dim); border: 1px dashed var(--border); border-radius: 12px; padding: 6px 18px; cursor: pointer; font-size: 12px; }
   #olderBtn:hover { color: var(--accent); border-color: var(--accent); }
   #banner { font-size: 12px; color: var(--err); padding: 0 22px 6px; display: none; }
+  /* T93 P2 断点恢复横幅：上次进程被中断、还有未完成回合时出现 */
+  #cpBar { display: none; align-items: center; gap: 8px; padding: 6px 22px; font-size: 12px; color: var(--text);
+           background: color-mix(in srgb, var(--accent) 8%, var(--panel)); border-bottom: 1px solid var(--border); }
+  #cpBar.show { display: flex; }
+  #cpBar .cpText { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #cpBar button { background: transparent; border: 1px solid var(--border); border-radius: 7px; color: var(--dim);
+                  font: inherit; font-size: 11.5px; padding: 2px 9px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+  #cpBar button:hover { color: var(--text); border-color: var(--accent); }
+  #cpBar button.primary { color: var(--accent); border-color: var(--accent); }
+  /* T93 B3：不可撤销的按钮就地置灰——用户该在点之前就知道，而不是点完才看到一句报错 */
+  .fo-undo:disabled { opacity: .45; cursor: not-allowed; }
+  .fo-undo:disabled:hover { color: var(--dim); border-color: var(--border); }
 
   /* ---- 自动化界面 / 设置界面（覆盖 #main 的独立视图） ---- */
   /* T25 .page 从顶栏之下开始（top 用 JS 写入的 --topbar-h，不再 inset:0 盖住顶栏），窗口控制按钮任何时候都可点 */
@@ -848,6 +874,17 @@
   /* T45 使用统计两张图：热力图 + 环形图（纯 SVG 手绘，零图表库；配色取主题字面量，导出/悬停都不依赖外部样式） */
   .chartgrid { margin-top: 16px; display: flex; flex-direction: column; gap: 14px; }
   .chartcard { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px 10px; }
+  /* T86 用量双图 3D 翻转卡：正面 Token 活动热力图，背面每日模型累计用量；右上角按钮翻面。
+     preserve-3d + backface-visibility 是翻转三板斧；背面绝对定位铺满正面同盒 */
+  .flip-card { perspective: 1400px; }
+  .flip-inner { position: relative; transition: transform .45s cubic-bezier(.4,.2,.2,1); transform-style: preserve-3d; min-height: 240px; }
+  /* T91：翻转方向改为上下翻转（rotateX）——左右翻转（rotateY）在视觉上像"换了内容"，
+     上下翻转像"同一张卡翻了个面"，更符合卡片直觉；背面同步 rotateX(180deg) 铺满正面同盒 */
+  .flip-card.flipped .flip-inner { transform: rotateX(180deg); }
+  .flip-face { backface-visibility: hidden; -webkit-backface-visibility: hidden; position: relative; }
+  .flip-face.back { position: absolute; inset: 0; transform: rotateX(180deg); overflow: auto; }
+  .flip-face .chartcard { position: relative; min-height: 220px; }
+  .flip-card { cursor: pointer; }
   .ch-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
   .ch-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
   .ch-sub { font-size: 11px; color: var(--dim); }
@@ -914,6 +951,13 @@
   .set-row .seg { display: inline-flex; padding: 0; overflow: hidden; }
   .set-row .seg button { background: transparent; border: none; color: var(--dim); padding: 6px 14px; cursor: pointer; font: inherit; font-size: 13px; }
   .set-row .seg button.active { background: var(--text); color: var(--bg); }
+  /* T86 分段控件滑动指示：容器加 .seg-slide 后由 JS 插入 .seg-thumb 滑块（transform 过渡），
+     active 按钮背景交给滑块、自身透明只变色——所有开关/分段（主题/导轨/备份/监工/钩子）统一丝滑 */
+  .seg-slide { position: relative; }
+  .seg-slide .seg-thumb { position: absolute; top: 2px; bottom: 2px; left: 2px; z-index: 0; background: var(--text); border-radius: 8px; transition: transform .18s cubic-bezier(.22,.61,.36,1); }
+  .seg-slide > button { position: relative; z-index: 1; background: transparent !important; transition: color .18s ease; text-align: center; }
+  .seg-slide > button.active { color: var(--bg); }
+  #assistWatchRow .seg-slide > button { padding: 4px 14px; font-size: 11.5px; }
   .kbd { display: inline-block; background: var(--panel2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px; padding: 0 7px; font-size: 12px; font-family: Consolas, monospace; color: var(--text); }
   /* T66 钩子设置：内置标签 / 新建表单 / 删除按钮 */
   .hook-tag { font-size: 10.5px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 5px; padding: 0 6px; line-height: 16px; vertical-align: 1px; }
@@ -923,6 +967,17 @@
   .hook-form .abtn { padding: 7px 12px; }
   .hseg button.hdel { color: var(--err); margin-left: 4px; }
   .hseg button.hdel.active { background: transparent; color: var(--err); }
+  /* T80 配对 token：等宽展示 + 复制按钮 */
+  .pair-row { display: flex; align-items: center; gap: 8px; }
+  .pair-row code { font-family: Consolas, monospace; font-size: 12.5px; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 9px; }
+  .pair-row .abtn { padding: 5px 10px; }
+  /* T83/T84 数据与安全卡：备份/通知/白名单的小输入组与列表 */
+  .bk-fields { display: flex; gap: 6px; align-items: center; }
+  .bk-fields input { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 6px 10px; font: inherit; font-size: 12.5px; width: 130px; }
+  .bk-fields input:focus { outline: none; border-color: var(--accent); }
+  .al-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 4px 10px; }
+  .al-item { display: inline-flex; align-items: center; gap: 6px; background: var(--panel2); border: 1px solid var(--border); border-radius: 7px; padding: 2px 8px; font-family: Consolas, monospace; font-size: 11.5px; color: var(--text); }
+  .al-item .al-del { background: none; border: none; color: var(--err); cursor: pointer; font-size: 13px; padding: 0 2px; font-family: inherit; }
   /* 快捷键：展示胶囊 + 点击自定义 */
   .hk-view { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; padding: 4px 8px; border-radius: 8px; border: 1px dashed transparent; }
   .hk-view:hover { border-color: var(--accent); background: var(--panel2); }
@@ -1017,7 +1072,7 @@
       <div id="todoHead">
         <span id="todoTitle">任务进度</span>
         <span id="todoCount"></span>
-        <button id="todoToggle" title="展开/收起">▾</button>
+        <button id="todoToggle" title="展开/收起"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
       <div id="todoProg"><div id="todoFill"></div></div>
       <div id="todoItems"></div>
@@ -1028,6 +1083,8 @@
       <div class="free"><input id="freeInput" placeholder="或输入自定义回答…"><button id="btnFree">回答</button></div>
     </div>
     <div id="banner"></div>
+    <!-- T93 P2 断点恢复：上次进程被中断、本会话还有未完成回合时显示，三个动作对应后端 resume -->
+    <div id="cpBar"><span class="cpText"></span><button class="primary" data-act="adopt">采纳已产出</button><button data-act="retry">重新发起</button><button data-act="discard">丢弃</button></div>
     <div id="inputArea">
       <div id="queueInfo"></div>
       <div id="queueList"></div>
@@ -1037,6 +1094,10 @@
           <button class="roundBtn" id="btnAttach" title="插入图片">＋</button>
           <button id="permBtn" title="权限档位"><span class="picon"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M8 1.5l5.2 2v4.1c0 3.2-2.2 5.5-5.2 6.9-3-1.4-5.2-3.7-5.2-6.9V3.5L8 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.6 7.9l1.7 1.7 3.1-3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="plabel">危险确认</span><span class="chev">▾</span></button>
           <button id="modelBtn" title="切换模型"><span class="label">选择模型</span><span class="chev">▾</span></button>
+          <!-- T85 长任务模式：收敛阈值放宽到 30 分钟（多步骤自动化不会被 3 分钟收敛误杀） -->
+          <button id="longTaskBtn" title="长任务模式：放宽收敛时限到 30 分钟，适合多步骤自动化任务">长任务</button>
+          <!-- 白皮书 10.29：浏览器工具三态（自动=提到浏览器/网页/链接才加载，省每步约 4.3k token） -->
+          <button id="mcpBtn" title="浏览器工具：自动（提到浏览器/网页/链接的回合才加载）· 点击切换 自动→开→关">浏览器:自动</button>
           <button class="roundBtn" id="btnSend" title="发送"><svg id="sendIcon" width="15" height="15" viewBox="0 0 16 16" fill="none" style="display:block"><path d="M14.2 1.8L7 9M14.2 1.8L9.6 14.2 7 9 2.2 6.4l12-4.6z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
       </div>
@@ -1247,6 +1308,7 @@
         <button class="sn-item active" data-sec="secUsage">使用统计</button>
         <button class="sn-item" data-sec="secAppearance">外观</button>
         <button class="sn-item" data-sec="secHooks">钩子</button>
+        <button class="sn-item" data-sec="secData">数据与安全</button>
         <button class="sn-item" data-sec="secModel">模型</button>
         <button class="sn-item" data-sec="secSearch">搜索引擎</button>
         <button class="sn-item" data-sec="secDb">数据库</button>
@@ -1299,6 +1361,41 @@
             <button class="abtn" id="hookCreate">添加</button>
           </div>
         </div>
+      </div>
+      <!-- T83/T84/T85 数据与安全：自动备份 / 完成通知 / 项目命令白名单 -->
+      <div class="acard" id="secData">
+        <h3>数据与安全</h3>
+        <div class="set-row">
+          <div class="sl">自动备份<div class="sd">定期把会话/记忆/配置/账本压缩到 ~/.yyagent/backups，滚动保留 N 份</div></div>
+          <div class="seg" id="segBackup"><button data-on="1">开启</button><button data-on="0">关闭</button></div>
+        </div>
+        <div class="set-row">
+          <div class="sl">保留份数 / 备份间隔（小时）</div>
+          <div class="bk-fields">
+            <input id="bkKeep" type="number" min="1" max="90"><input id="bkEvery" type="number" min="1" max="720">
+            <button class="abtn" id="bkSave">保存</button><button class="abtn" id="bkRun">立即备份</button>
+          </div>
+        </div>
+        <div class="set-row" id="bkListRow" style="display:none;">
+          <div class="sl">已有备份<div class="sd" id="bkList"></div></div>
+        </div>
+        <div class="set-row">
+          <div class="sl">完成通知<div class="sd">回合/定时任务完成时本地弹窗；填 webhook 地址可推送到手机（ntfy 主题地址或 Server酱 SendKey，POST 正文即文本）</div></div>
+          <div class="bk-fields"><input id="notifyUrl" placeholder="https://ntfy.sh/你的主题（留空只本地弹窗）"><button class="abtn" id="notifySave">保存</button></div>
+        </div>
+        <div class="set-row" style="border-bottom:none;">
+          <div class="sl">沙箱执行（实验）<div class="sd">bash 命令默认在 Docker 容器的 Linux bash 中执行（工作区挂载 /workspace）；需本机装有 Docker。Docker 状态：<span id="sbDocker">检测中…</span></div></div>
+          <div class="bk-fields">
+            <div class="seg" id="segSandbox"><button data-on="1">开启</button><button data-on="0">关闭</button></div>
+            <input id="sbImage" placeholder="镜像，如 node:22-bookworm">
+            <button class="abtn" id="sbSave">保存</button>
+          </div>
+        </div>
+        <div class="set-row" style="border-bottom:none;">
+          <div class="sl">项目命令白名单<div class="sd">当前工作区 <span id="alCwd">…</span>：命中前缀的 bash 命令免确认直接执行</div></div>
+          <div class="bk-fields"><input id="alPrefix" placeholder="命令前缀，如 npm 或 git push"><button class="abtn" id="alAdd">添加</button></div>
+        </div>
+        <div id="alList" class="al-list"></div>
       </div>
       <div class="acard" id="secModel">
         <h3>模型</h3>
@@ -1364,8 +1461,13 @@
       </div>
       <div class="acard" id="secAbout">
         <h3>关于</h3>
-        <div class="set-row" style="border-bottom:none;">
+        <div class="set-row">
           <div class="sl">关于<div class="sd">本地 AI Agent · 作者 YYMY · 引擎文件式状态存储 · 网关 127.0.0.1:8642</div></div>
+        </div>
+        <!-- T80 局域网配对：token 只在本机显示，手机/其它电脑访问 /api/* 时需粘贴它配对 -->
+        <div class="set-row" style="border-bottom:none;">
+          <div class="sl">局域网配对 token<div class="sd">其它设备首次访问本机 agent 时，在此复制 token 粘贴配对；仅本机可见</div></div>
+          <div class="pair-row"><code id="pairToken">…</code><button class="abtn" id="pairCopy" type="button">复制</button></div>
         </div>
       </div>
     </div></div>
@@ -1417,7 +1519,8 @@ function fmtBlock(s) {
     const mm = renderMindmap(lines)
     if (mm) return mm
   }
-  // T15 围栏代码块缓冲：``` 内的树形字符画 → 气泡思维导图；T49 信息行写 chart 的围栏 → 原生 SVG 图表；其他围栏内容保持原样
+  // T15 围栏代码块缓冲：``` 内的树形字符画 → 气泡思维导图；T49 信息行写 chart 的围栏 → 原生 SVG 图表；
+  // 10.33 信息行写 svg 的围栏 → 模型手写 SVG 净化后直通渲染（拿不准/被净化空了 → 降级代码块）
   let fenceBuf = null
   let fenceLang = ""
   const flushFence = () => {
@@ -1429,6 +1532,10 @@ function fmtBlock(s) {
     if (lang === "chart") {
       const chart = renderChartBlock(inner.join("\n"))
       if (chart) { out.push(chart); return }
+    }
+    if (lang === "svg") {
+      const svg = renderSvgBlock(inner.join("\n"))
+      if (svg) { out.push(svg); return }
     }
     if (looksLikeTree(inner)) {
       const mm = renderMindmap(inner)
@@ -1639,6 +1746,85 @@ function renderChartBlock(src) {
     }
   }
   return `<div class="chartbox"><svg viewBox="0 0 ${W} ${H}" role="img" xmlns="http://www.w3.org/2000/svg">${svg}</svg></div>`
+}
+
+/** 10.33 svg 围栏协议的净化器。
+ *
+ *  背景：svg 围栏让模型**手写 SVG 直通渲染**（对比 WorkBuddy 可视化差距后的融合口子，
+ *  见白皮书 10.33）。但模型输出是半可信的——提示注入能让它吐出带 `<script>` 或
+ *  `onclick=` 的 SVG，在 Web/Electron 渲染器里就是 XSS。净化规则六条，每条都有
+ *  对应的行为测试（tests/webSvgFence.test.ts）：
+ *   ① 只认 `<svg …</svg>` 区间，认不出返回 null（降级为代码块）
+ *   ② 整体剥掉可执行/可外载元素：script / foreignObject / style
+ *   ③ 剥掉全部 on* 事件属性（双引号/单引号/无引号三种形态）
+ *   ④ href/xlink:href 只允许 # 片段（挡外链图片、外链跳转、data: URI）
+ *   ⑤ 属性值以 javascript:/vbscript: 开头、或含实体编码（&#，绕过 scheme 检查的
+ *      经典花招）→ 整个属性删掉
+ *   ⑥ 净化后必须还含 `<svg`，否则 null 降级
+ */
+function sanitizeSvg(src) {
+  const m = String(src ?? "").match(/<svg[\s\S]*<\/svg>/i)
+  if (!m) return null
+  let s = m[0]
+  // ② 可执行/可外载元素整体去掉（含其内容）
+  s = s.replace(/<\s*(script|foreignObject|style)\b[\s\S]*?<\s*\/\s*\1\s*>/gi, "")
+  s = s.replace(/<\/?\s*(script|foreignObject|style)\b[^>]*>/gi, "")
+  // 逐标签清属性（③④⑤）
+  s = s.replace(/<[a-zA-Z][^>]*>/g, (tag) => {
+    let t = tag
+    t = t.replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, "")
+    t = t.replace(/\son[a-z]+\s*=\s*'[^']*'/gi, "")
+    t = t.replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, "")
+    t = t.replace(/\s(?:xlink:)?href\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, (m0, q) => {
+      const v = String(q).replace(/^["']|["']$/g, "").trim()
+      return v.startsWith("#") ? m0 : ""
+    })
+    t = t.replace(/([a-zA-Z:-]+)\s*=\s*("[^"]*"|'[^']*')/g, (m0, _attr, q) => {
+      const v = q.slice(1, -1)
+      if (/^\s*(javascript|vbscript)\s*:/i.test(v) || /&#/.test(v)) return ""
+      return m0
+    })
+    return t
+  })
+  if (!/<svg[\s>]/i.test(s)) return null
+  return s
+}
+
+/** svg 围栏 → 净化通过则包 .svgbox 直通渲染；任何一步不过返回 null（调用方降级为代码块）。 */
+function renderSvgBlock(src) {
+  const svg = sanitizeSvg(src)
+  if (!svg) return null
+  return `<div class="svgbox">${svg}</div>`
+}
+
+/** 第二道闸的策略（纯函数，node 可测——tests/webSvgFence.test.ts）。
+ *  第一道闸 sanitizeSvg 是正则，看的是字符串；浏览器解析器看的是 DOM，
+ *  畸形嵌套（mXSS）能让两者不一致。这两个函数是解析后清场的判据。 */
+function svgElForbidden(tag) { return /^(script|foreignObject|style)$/i.test(String(tag ?? "")) }
+function svgAttrForbidden(name, val) {
+  const low = String(name ?? "").toLowerCase()
+  const v = String(val ?? "")
+  if (low.startsWith("on")) return true
+  if ((low === "href" || low === "xlink:href") && !v.trim().startsWith("#")) return true
+  // 解析后实体已解码：源码里的 java&#115;cript: 到这里就是 javascript:，直接认出来
+  if (/^\s*(javascript|vbscript)\s*:/i.test(v)) return true
+  return false
+}
+
+/** 第二道闸：对已写入 DOM 的 .svgbox 内容同步遍历清场。
+ *  时机安全：innerHTML 赋值与本函数在同一次任务里连跑，图片加载/脚本派发都是
+ *  异步任务，清场一定先于任何 onerror 之类触发；且经 innerHTML 插入的 script
+ *  按规范本就不执行。这道闸的价值是关掉「正则视野与解析器视野不一致」那一类
+ *  漏网——第一道闸挡节点测试覆盖的全部规则，这道闸挡解析差异。 */
+function hardenSvgBoxes(root) {
+  if (!root || !root.querySelectorAll) return
+  root.querySelectorAll(".svgbox *").forEach((el) => {
+    if (svgElForbidden(el.tagName)) { el.remove(); return }
+    const names = el.getAttributeNames ? [...el.getAttributeNames()] : []
+    for (const a of names) {
+      if (svgAttrForbidden(a, el.getAttribute(a))) el.removeAttribute(a)
+    }
+  })
 }
 // 每层的字号/内边距/高度/圆角：越深越小越轻，视觉重量从根向外递减
 const MM_LEVEL = [
@@ -1972,6 +2158,104 @@ function renderPermBtn() {
   b.querySelector(".plabel").textContent = PERM_LABEL[permMode] ?? permMode
   $("permMenu").querySelectorAll(".mi").forEach((el) => el.classList.toggle("active", el.dataset.mode === permMode))
 }
+// T85 长任务模式：按会话开关（服务端记录，收敛阈值放宽到 30 分钟）
+let longTaskOn = false
+async function syncLongTask() {
+  if (!activeId) return
+  try { longTaskOn = ((await (await fetch(`/api/longtask?sid=${encodeURIComponent(activeId)}`)).json()) || {}).on === true } catch { return }
+  $("longTaskBtn").classList.toggle("active", longTaskOn)
+}
+$("longTaskBtn").onclick = async () => {
+  if (!activeId) { $("status").textContent = "先选择一个会话"; return }
+  try {
+    const r = await (await fetch("/api/longtask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: activeId, on: !longTaskOn }) })).json()
+    longTaskOn = !!r.on
+    $("longTaskBtn").classList.toggle("active", longTaskOn)
+    $("status").textContent = longTaskOn ? "长任务模式：已放宽收敛时限（30 分钟）" : "已恢复默认收敛时限"
+  } catch { /* 静默 */ }
+}
+// 白皮书 10.29：浏览器工具三态。mcpOn: true=手动开 / false=手动关 / null=自动（按意图）。
+// 35 个 MCP 浏览器工具 ≈ 每步 4.3k token——纯文件/编码任务发出去纯属浪费，故默认按意图加载。
+let mcpOn = null
+function renderMcpBtn() {
+  const b = $("mcpBtn")
+  b.textContent = mcpOn === true ? "浏览器:开" : mcpOn === false ? "浏览器:关" : "浏览器:自动"
+  b.classList.toggle("active", mcpOn === true)
+  b.classList.toggle("off", mcpOn === false)
+  b.title = mcpOn === true
+    ? "浏览器工具：已开启（本会话每轮都加载，每步多约 4.3k token）· 点击切换到 关"
+    : mcpOn === false
+      ? "浏览器工具：已关闭（本会话不加载）· 点击切换到 自动"
+      : "浏览器工具：自动（提到浏览器/网页/链接的回合才加载）· 点击切换到 开"
+}
+async function syncMcpState() {
+  if (!activeId) return
+  try { mcpOn = ((await (await fetch(`/api/sessions/${encodeURIComponent(activeId)}/mcp`)).json()) || {}).on ?? null } catch { return }
+  renderMcpBtn()
+}
+$("mcpBtn").onclick = async () => {
+  if (!activeId) { $("status").textContent = "先选择一个会话"; return }
+  // 单击循环：自动 → 开 → 关 → 自动
+  const next = mcpOn === true ? false : mcpOn === false ? null : true
+  try {
+    const r = await (await fetch(`/api/sessions/${encodeURIComponent(activeId)}/mcp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on: next }) })).json()
+    mcpOn = r.on === undefined ? null : r.on
+    renderMcpBtn()
+    $("status").textContent = mcpOn === true ? "浏览器工具：本会话每轮都加载" : mcpOn === false ? "浏览器工具：本会话不加载" : "浏览器工具：自动（提到浏览器/网页/链接才加载）"
+  } catch { /* 静默 */ }
+}
+// T93 P2 断点恢复：拉未完成回合列表，只对**当前会话**出横幅（其他会话只在文案里报数）
+async function syncCheckpoints() {
+  const bar = $("cpBar")
+  if (!bar) return
+  try {
+    const list = ((await (await fetch("/api/sessions/checkpoints")).json()) || {}).checkpoints || []
+    const mine = list.filter((c) => c.sessionId === activeId)
+    if (!mine.length) { bar.classList.remove("show"); return }
+    const c = mine[0]
+    bar.querySelector(".cpText").textContent =
+      `上次进程被中断，这个回合没跑完：${c.summary || c.title || ""}`
+    bar.classList.add("show")
+    bar.querySelectorAll("button").forEach((b) => { b.dataset.sid = c.sessionId })
+  } catch { bar.classList.remove("show") }
+}
+$("cpBar").querySelectorAll("button").forEach((b) => {
+  b.onclick = async () => {
+    const sid = b.dataset.sid
+    const act = b.dataset.act
+    if (!sid) return
+    if (act === "discard" && !confirm("丢弃这一轮的中断记录？会话会回到你发送那条消息之前。")) return
+    b.disabled = true
+    try {
+      const r = await (await fetch("/api/sessions/checkpoints/resume", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sid, action: act }),
+      })).json()
+      if (r?.ok) {
+        $("cpBar").classList.remove("show")
+        $("status").textContent =
+          act === "adopt" ? "已采纳中断前产出的部分" : act === "retry" ? "已按原输入重新发起" : "已丢弃这一轮"
+        // 落库的消息由服务端广播 message 事件追加，这里不自己插——否则会和广播重复一份
+        if (act === "retry") refreshState().catch(() => {})
+      } else {
+        $("status").textContent = r?.error || r?.text || "操作失败"
+      }
+    } catch (e) { $("status").textContent = `操作失败：${e && e.message ? e.message : e}` }
+    finally { b.disabled = false }
+  }
+})
+
+// T93 B3 撤销状态：会话打开/刷新时批量拉一次「哪一轮能撤、为什么不能」。
+// 拉不到就保持空对象——那时按钮照常可点，点击时的错误路径作为兜底
+//（状态可能在拉取之后变化，比如同会话另一个窗口撤过了）。
+async function syncUndoState() {
+  if (!activeId) return
+  try {
+    const r = await (await fetch(`/api/sessions/${encodeURIComponent(activeId)}/undo-state`)).json()
+    window.__undoState = (r && r.states) || {}
+  } catch { window.__undoState = {} }
+  render()
+}
+
 function openPermMenu() {
   const btn = $("permBtn"), menu = $("permMenu")
   renderPermBtn()
@@ -2221,7 +2505,7 @@ function render() {
           const du = imgs[Number(mm[1]) - 1]
           if (du) {
             const idx = Number(mm[1]) - 1
-            html += `<span class="bubble-img"><img src="${du}" data-imgidx="${idx}" title="点击查看原图">` +
+            html += `<span class="bubble-img"><img src="${withTok(du)}" data-imgidx="${idx}" title="点击查看原图">` +
               `<span class="imgdl" data-imgidx="${idx}" title="下载图片"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 2v8m0 0l3-3m-3 3L5 7M2.5 12.5h11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span></span>`
           } else html += esc(mm[0])
           last = mm.index + mm[0].length
@@ -2272,6 +2556,9 @@ function render() {
       if (m.role === "assistant" && m.fileEdits?.length) {
         const undoKey = `${m.ts}`
         const undone = (window.__undoneTs ?? (window.__undoneTs = new Set())).has(undoKey)
+        // T93 B3：撤销状态预先拉过（syncUndoState）——不能撤的就地置灰并说清原因，
+        // 而不是等用户点下去才弹一句「没有该轮的文件快照」
+        const ust = (window.__undoState ?? (window.__undoState = {}))[undoKey] || {}
         const newCount = m.fileEdits.filter((f) => f.kind === "write").length
         const diffAdd = m.fileEdits.filter((f) => f.kind !== "write").length
         const diffTxt = `${newCount ? `<span class="add">+${newCount} 新建</span>` : ""}${newCount && diffAdd ? " " : ""}${diffAdd ? `<span class="del">${diffAdd} 编辑</span>` : ""}`
@@ -2281,7 +2568,11 @@ function render() {
             <span class="chev"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
             <span class="fo-sum">${m.fileEdits.length} 个文件已更改</span>
             <span class="fo-diff">${diffTxt}</span>
-            ${undone ? `<span class="fo-undo done"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3.2 3.2L13 5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>已撤销</span>` : `<button class="fo-undo" data-ts="${undoKey}" title="把这轮修改的文件恢复到改动前（新建文件会被删除）"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M6.5 3.5L3.5 6.5m0 0l3 3m-3-3h6a3.5 3.5 0 013.5 3.5v0A3.5 3.5 0 019.5 13.5H7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>撤销</button>`}
+            ${undone
+              ? `<span class="fo-undo done"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3.2 3.2L13 5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>已撤销</span>`
+              : ust.canUndo === false
+                ? `<button class="fo-undo" data-ts="${undoKey}" disabled title="${esc(ust.reason || "该轮没有可撤销的快照")}"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M6.5 3.5L3.5 6.5m0 0l3 3m-3-3h6a3.5 3.5 0 013.5 3.5v0A3.5 3.5 0 019.5 13.5H7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>无法撤销</button>`
+                : `<button class="fo-undo" data-ts="${undoKey}" title="把这轮修改的文件恢复到改动前（新建文件会被删除）"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M6.5 3.5L3.5 6.5m0 0l3 3m-3-3h6a3.5 3.5 0 013.5 3.5v0A3.5 3.5 0 019.5 13.5H7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>撤销</button>`}
           </div>
           <div class="fo-files">
           ${m.fileEdits.map((f) => { const fn = f.path.split(/[\\/]/).pop(); return `<div class="fo-file" data-path="${esc(f.path)}" title="${esc(f.path)}（点击预览）"><span class="aico">${fmIcon(fn)}</span><span class="k">${f.kind === "write" ? "新建" : "编辑"}</span><span class="p">${esc(fn)}</span><span class="tag ${f.kind === "write" ? "new" : "add"}">${f.kind === "write" ? "新建" : "已修改"}</span></div>` }).join("")}
@@ -2309,7 +2600,8 @@ function render() {
       return `${divider}<div class="msg assistant${arch}" id="msg${i}"><div class="who">${who}</div>${assistBody}${steps}${msgActs}</div>${turnSep}`
     }).join("")
     box.innerHTML = olderBtn + body +
-    (streamingOn ? `<div class="msg assistant" id="streaming"><div class="who">${esc(modelShort(activeSessionModel()))}<span class="thinkspin" id="thinkSpin"><i></i><i></i><i></i></span></div>${streamStatusText ? `<div class="stream-status" id="streamStatus"><span class="spinner"></span><span id="streamStatusText">${esc(streamStatusText)}</span></div>` : ""}<div id="activity"></div><div class="body" id="streamBody"></div></div>` : "")
+    (streamingOn ? `<div class="msg assistant" id="streaming"><div class="who">${esc(modelShort(activeSessionModel()))}</div>${streamStatusText ? `<div class="stream-status" id="streamStatus"><span id="streamStatusText" class="shimmer-text">${esc(streamStatusText)}</span></div>` : ""}<div id="activity"></div><div class="body" id="streamBody"></div></div>` : "")
+    hardenSvgBoxes(box) // 10.34 第二道闸：.svgbox 内容写入后同步清场（解析差异兜底）
     // jumpBottom 是静态节点（HTML 里定义），innerHTML 重写不会碰它
     // T45：导图横向偏移回填（先同步来一次，再补一帧兜住布局尚未算完的情况）
     restoreMmScroll()
@@ -2504,8 +2796,10 @@ function downloadDataUrl(du, filename) {
   a.download = filename || "image"
   document.body.appendChild(a); a.click(); a.remove()
 }
-async function downloadFile(path, filename) {
+async function downloadFile(pathOrUrl, filename) {
   // 经网关 /api/file 读本地文件 → blob 下载（文件名取路径末段）
+  // T92：也接受 /api/file?p=... 形式的引用（会话图片外置后 img.src 就是它），自动还原成路径
+  const path = pathOfRef(pathOrUrl) ?? pathOrUrl
   try {
     const r = await fetch(`/api/file?p=${encodeURIComponent(path)}`)
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -2620,7 +2914,12 @@ function bindMediaEvents() {
       el.dataset._justClicked = "1"
       setTimeout(() => { delete el.dataset._justClicked }, 50)
       const img = el.closest(".bubble-img")?.querySelector("img")
-      if (img) downloadDataUrl(img.src, `图片${(img.dataset.imgidx ?? 0) * 1 + 1}`)
+      if (img) {
+        const nm = `图片${(img.dataset.imgidx ?? 0) * 1 + 1}`
+        // T92：会话图片外置后 img.src 是 /api/file 引用，走 downloadFile；未迁移的老数据仍是 dataUrl
+        if (img.src.startsWith("data:")) downloadDataUrl(img.src, nm)
+        else downloadFile(img.src, nm)
+      }
     }
   })
   // assistant 输出的本地文件卡片：图片 → 查看器；其他 → 下载
@@ -2633,14 +2932,24 @@ function bindMediaEvents() {
     }
   })
   // P2-4 成果交付：复制分享链接（本机网关地址，局域网内可直接打开）
+  // T70：链接带上配对 token（手机等局域网设备访问 /api/file 需要它）
   box.querySelectorAll(".file-card .fc-share").forEach((el) => {
     el.onclick = async (e) => {
       e.stopPropagation()
-      const url = `${location.origin}/api/file?p=${encodeURIComponent(el.dataset.path)}`
+      let tok = ""
+      let lan = true
+      try {
+        const pr = (await (await fetch("/api/pair")).json()) || {}
+        tok = pr.token || ""
+        // T92：lan=false 表示网关只监听本机，分享链接在别的设备上打不开——先说清楚，别让人白试
+        lan = pr.lan !== false
+      } catch { /* 本机取不到就不带 token，也不断言监听范围 */ }
+      const url = `${location.origin}/api/file?p=${encodeURIComponent(el.dataset.path)}${tok ? `&token=${tok}` : ""}`
       try {
         await navigator.clipboard.writeText(url)
         el.classList.add("copied")
         setTimeout(() => el.classList.remove("copied"), 1500)
+        if (!lan) alert("链接已复制。注意：当前网关只监听本机（lanShare 未开启），此链接在手机等其它设备上打不开。")
       } catch {
         // 剪贴板不可用（非 https 等）退化为 prompt
         window.prompt("复制此分享链接：", url)
@@ -2685,6 +2994,7 @@ function bindMediaEvents() {
         if (r.ok) {
           ;(window.__undoneTs ?? (window.__undoneTs = new Set())).add(String(ts))
           $("status").textContent = `已撤销 ${d.restored} 个文件的修改`
+          syncUndoState() // 撤过的轮次要置灰，快照也可能已被清掉
           render()
         } else {
           el.disabled = false; el.textContent = "撤销"
@@ -2972,7 +3282,18 @@ function renderUsageCharts() {
     el.innerHTML = `<div class="ch-empty">用量明细接口还没有就绪 —— 重启网关后可用（/api/usage/daily、/api/usage/models）。</div>`
     return
   }
-  el.innerHTML = `<div class="chartcard">${usageHeatmap(usageCache.daily)}</div><div class="chartcard">${usageDonut(usageCache.models)}</div><div id="chTip"></div>`
+  // T86：两张用量图合并为一张 3D 翻转卡——正面 Token 活动热力图，背面每日模型累计用量环形图，
+  // T86 修正：翻转改为**点卡片本体**（右上角浮动按钮会压住热力图的口径分段控件）。
+  // 排除内部交互元素：口径分段按钮/刷新/任何 button 与链接——只有点空白处才翻面。
+  el.innerHTML = `<div class="flip-card" id="usageFlip" title="点击空白处翻面：切换热力图 / 模型用量环形图"><div class="flip-inner">` +
+    `<div class="flip-face front"><div class="chartcard">${usageHeatmap(usageCache.daily)}</div></div>` +
+    `<div class="flip-face back"><div class="chartcard">${usageDonut(usageCache.models)}</div></div>` +
+    `</div></div><div id="chTip"></div>`
+  el.querySelector("#usageFlip").onclick = (e) => {
+    const t = e.target
+    if (t && t.closest && t.closest("button, a, input, .seg, #hmSeg, #usageRefresh")) return
+    el.querySelector("#usageFlip").classList.toggle("flipped")
+  }
   // 每日/每周/累计：切口径重画热力图
   el.querySelectorAll("#hmSeg button").forEach((b) => { b.onclick = () => { usageHmMode = b.dataset.m; renderUsageCharts() } })
   const rf = el.querySelector("#usageRefresh")
@@ -2995,6 +3316,8 @@ function renderUsageCharts() {
     })
     svg.addEventListener("mouseleave", () => { tip.style.display = "none" })
   }
+  // T86 翻面按钮 + 热力图口径分段滑块
+  slideAllSegs()
 }
 
 // #28 底部上下文行最左边：显示当前会话工作区的文件夹名（SVG 图标 + 名称，悬停看全路径）
@@ -3016,6 +3339,10 @@ function openSession(id, jumpIdx) {
   $("status").textContent = ""
   // F1 会话级模型：换会话立即按该会话刷新模型显示（refreshState 会带 sid 重取 sessionModel）
   refreshState().catch(() => {})
+  syncLongTask() // T85：换会话同步该会话的长任务模式开关状态
+  syncMcpState() // 白皮书 10.29：换会话同步浏览器工具三态
+  syncCheckpoints() // T93 P2：换会话看这个会话有没有未完成的回合
+  syncUndoState() // T93 B3：换会话同步「哪几轮的文件修改还能撤销」
   // 辅助对话按会话隔离：抽屉开着时切会话，立即重拉该会话的子代理历史
   if ($("assistDrawer").classList.contains("open")) loadAssist()
   else assistLoadedFor = null // 关着则记为未加载，下次打开时拉对应会话
@@ -3149,16 +3476,16 @@ function renderTodoBar(todo, isBusy) {
     if (todoHideTimer) { clearTimeout(todoHideTimer); todoHideTimer = null }
     todoShownForBusy = true
   } else if (!isBusy && todoShownForBusy) {
-    // 任务刚结束：保留 10 秒让用户看到最终进度，然后消失
+    // 任务刚结束：保留 10 秒让用户看到最终进度，然后收拢为摘要条（T86：卡片常驻，不再整体消失）
     if (!todoHideTimer) {
       todoHideTimer = setTimeout(() => {
         todoHideTimer = null
         todoShownForBusy = false
-        bar.className = todoExpanded ? "expanded" : ""
+        bar.className = todoExpanded ? "show expanded" : "show"
       }, 10_000)
     }
-  } else if (!todoShownForBusy) {
-    // 空闲且没有在展示期：彻底隐藏（这是默认态——新对话无任务不弹出）
+  } else if (!todoShownForBusy && !has) {
+    // 空闲且没有任务：彻底隐藏（这是默认态——新对话无任务不弹出）
     bar.className = todoExpanded ? "expanded" : ""
     return
   }
@@ -3254,7 +3581,9 @@ function upsertStep(m, kind) {
 // ---- WS ----
 let ws
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws`)
+  // T80：非本机连接需要配对 token（本机不需要，带了也无妨）
+  const tok = localStorage.getItem("yyagent-token")
+  ws = new WebSocket(`ws://${location.host}/ws${tok ? `?token=${tok}` : ""}`)
   ws.onopen = () => { /* 拉一次全量状态 */ }
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data)
@@ -3269,7 +3598,7 @@ function connect() {
       streamBuf += m.delta
       $("thinkSpin")?.remove() // 首个字到达：撤掉「思考中」三点动画
       const el = $("streamBody")
-      if (el) { el.innerHTML = fmtBlock(streamBuf); scrollBottom() } // 流式同样走块级 Markdown（表格跨行累积，未闭合时末行按普通文本）
+      if (el) { el.innerHTML = fmtBlock(streamBuf); hardenSvgBoxes(el); scrollBottom() } // 流式同样走块级 Markdown（表格跨行累积，未闭合时末行按普通文本）；10.34 流式围栏也要过第二道闸
     }
     else if (m.type === "status") {
       // R4：status 带 sessionId；当前会话才显示（压缩中提示也走这条）
@@ -3303,6 +3632,8 @@ function connect() {
         if (!m.busy && (!sid || sid === activeId)) { streamingOn = false; streamBuf = ""; window.__steps = []; window.__actOpen = -1 }
         renderMonitor()
         render()
+        // T93 P2：回合一结束就重查一次——这一轮要是被中断（进程被杀/超时强停），横幅该出来了
+        if (!m.busy && (!sid || sid === activeId)) syncCheckpoints()
       } else render() // 侧栏转圈要跟着变
     }
     else if (m.type === "model") {
@@ -3767,10 +4098,61 @@ $("assistMsgs").addEventListener("click", (e) => {
   }
 })
 
+// ---- T80 局域网鉴权前端侧：/api/ 请求自动携带配对 token；本机启动即从 /api/pair 自动获取 ----
+let __yyToken = localStorage.getItem("yyagent-token") ?? ""
+// T92 会话图片外置：图片引用变成 /api/file?p=...，而 <img> 是浏览器原生请求、不走下面的 fetch 拦截器——
+// 局域网（lanShare）访问时得自己把 token 拼进 URL，否则图片一律 401。本机访问时拼不拼都放行。
+function withTok(u) {
+  if (!u || typeof u !== "string" || u.startsWith("data:")) return u
+  if (!__yyToken || /[?&]token=/.test(u)) return u
+  return u + (u.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(__yyToken)
+}
+// /api/file?p=<绝对路径> → 绝对路径（下载/查看时要用原始路径）
+function pathOfRef(ref) {
+  const m = /^\/api\/file\?p=([^&]+)/.exec(ref || "")
+  if (!m) return null
+  try { return decodeURIComponent(m[1]) } catch { return null }
+}
+const __origFetch = window.fetch.bind(window)
+window.fetch = async (input, init) => {
+  const url = typeof input === "string" ? input : (input instanceof URL ? input.href : (input && input.url) || "")
+  const needs = typeof url === "string" && url.includes("/api/") && !url.includes("/api/pair")
+  const res = await __origFetch(input, { ...(init || {}), headers: { ...((init && init.headers) || {}), ...(needs && __yyToken ? { "X-YY-Token": __yyToken } : {}) } })
+  if (res.status === 401 && needs) {
+    // 远程设备未配对：本机可静默从 /api/pair 直取；远程弹输入框粘贴本机设置页里的 token
+    try {
+      let tok = ""
+      try { tok = ((await __origFetch("/api/pair")).json() || {}).token || "" } catch { tok = "" }
+      if (!tok) tok = window.prompt("此设备尚未配对：请在本机 Yy Sustainer 的「设置 → 关于」复制配对 token 粘贴到这里") || ""
+      if (tok) {
+        __yyToken = tok
+        localStorage.setItem("yyagent-token", tok)
+        return __origFetch(input, { ...(init || {}), headers: { ...((init && init.headers) || {}), "X-YY-Token": __yyToken } })
+      }
+    } catch { /* 配对失败，401 原样返回 */ }
+  }
+  return res
+}
+fetch("/api/pair").then((r) => r.json()).then((j) => { if (j && j.token) { __yyToken = j.token; localStorage.setItem("yyagent-token", j.token) } }).catch(() => {})
 loadSessions(); refreshState(); connect(); updateSendBtn()
 setInterval(refreshState, 3000)
 
 // ---- 主题切换：一键深/浅，localStorage 记忆，首次跟随系统；按钮图标随主题切换（深色显太阳=点去亮，浅色显月亮） ----
+// T86 分段控件滑块：给页面里所有 .seg 装上滑动指示块，并按当前 .active 按钮同步位置。
+// 以实际 offsetLeft/offsetWidth 定位（兼容不等宽按钮与 hseg 里的「删除」钮），窗口隐藏（宽 0）时跳过。
+function slideAllSegs() {
+  document.querySelectorAll(".seg").forEach((seg) => {
+    if (seg.offsetWidth < 10) return
+    const slots = [...seg.querySelectorAll(":scope > button")].filter((b) => !b.classList.contains("hdel"))
+    if (slots.length < 2) return
+    seg.classList.add("seg-slide")
+    let thumb = seg.querySelector(":scope > .seg-thumb")
+    if (!thumb) { thumb = document.createElement("span"); thumb.className = "seg-thumb"; seg.insertBefore(thumb, slots[0]) }
+    const idx = Math.max(0, slots.findIndex((b) => b.classList.contains("active")))
+    thumb.style.width = slots[idx].offsetWidth + "px"
+    thumb.style.transform = `translateX(${slots[idx].offsetLeft - 2}px)`
+  })
+}
 function applyTheme(t) {
   t = t === "light" ? "light" : "dark" // 防 localStorage 脏值（既非 light 也非 dark 时回退深色）
   document.documentElement.classList.toggle("light", t === "light")
@@ -3780,6 +4162,7 @@ function applyTheme(t) {
   // T43：思维导图的配色是 JS 按主题算成字面量写进 SVG 的（为了能导出图片），换主题后必须重绘一次，
   // 否则要等 3s 轮询才变色。这里复用 render()（和 refreshState 走同一条路，幂等）。
   render()
+  slideAllSegs() // T86：主题分段滑块同步
 }
 applyTheme(localStorage.getItem("yyagent-theme") ?? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"))
 $("themeBtn").onclick = () => applyTheme(document.documentElement.classList.contains("light") ? "dark" : "light")
@@ -4121,6 +4504,7 @@ function applyRailMode(mode) {
   document.body.dataset.rail = mode
   $("segRail").querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.v === mode))
   syncRailOffsetInstant() // T68：设置切换/启动恢复都会改变 rail 显隐，显示瞬间免过渡落位
+  slideAllSegs() // T86：导轨显隐分段滑块同步
 }
 $("segRail").querySelectorAll("button").forEach((b) => b.onclick = () => {
   localStorage.setItem("yyagent-rail", b.dataset.v)
@@ -4131,6 +4515,7 @@ applyRailMode(localStorage.getItem("yyagent-rail") ?? "always")
 // 开关位于辅助对话顶部 #assistWatchRow 内
 function renderWatchSeg() {
   $("segWatch").querySelectorAll("button").forEach((b) => b.classList.toggle("active", (b.dataset.w === "on") === watchMode))
+  slideAllSegs() // T86：监工模式分段滑块同步
 }
 $("segWatch").querySelectorAll("button").forEach((b) => b.onclick = async () => {
   const on = b.dataset.w === "on"
@@ -4150,16 +4535,28 @@ async function renderHooks() {
     ).join("")
     $("hookList").querySelectorAll(".hseg button[data-h]").forEach((b) => b.onclick = async () => {
       await fetch("/api/hooks/toggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: b.dataset.h, enabled: b.dataset.on === "1" }) })
-      renderHooks()
+      // T86 修正：开关**原地更新**该行两个按钮状态 + 滑块滑动，不整卡重渲染
+      // （整卡重渲染会让其他钩子的控件闪一次重载、滑块动画也被打断）
+      const seg = b.closest(".hseg")
+      const on = b.dataset.on === "1"
+      seg.querySelectorAll("button[data-h]").forEach((x) => x.classList.toggle("active", (x.dataset.on === "1") === on))
+      slideAllSegs()
     })
     $("hookList").querySelectorAll(".hdel").forEach((b) => b.onclick = async () => {
       await fetch("/api/hooks/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: b.dataset.del }) })
       renderHooks()
     })
+    slideAllSegs() // T86：钩子开关分段滑块同步（行是重渲染的，每次都要重装）
   } catch { $("hookList").innerHTML = `<div class="sr-empty">钩子列表加载失败</div>` }
 }
-$("hookCreate").onclick = async () => {
-  const name = $("hookName").value.trim()
+// T80 配对 token 复制：完整 token 只在本机可见，点击复制供其它设备粘贴
+$("pairCopy").onclick = async () => {
+  const t = $("pairToken").dataset.full || ""
+  if (!t) return
+  try { await navigator.clipboard.writeText(t); $("pairCopy").textContent = "已复制"; setTimeout(() => ($("pairCopy").textContent = "复制"), 1200) }
+  catch { window.prompt("复制此配对 token：", t) }
+}
+$("hookCreate").onclick = async () => {  const name = $("hookName").value.trim()
   const prompt = $("hookPrompt").value.trim()
   if (!name || !prompt) { $("status").textContent = "钩子名称与检查要求不能为空"; return }
   await fetch("/api/hooks/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, prompt }) })
@@ -4167,11 +4564,91 @@ $("hookCreate").onclick = async () => {
   $("hookPrompt").value = ""
   renderHooks()
 }
+// ---- T83/T84/T85 数据与安全：自动备份 / 完成通知 / 项目命令白名单 ----
+let __secDataCwd = ""
+async function loadDataSec() {
+  try {
+    const d = await (await fetch("/api/backup")).json()
+    $("segBackup").querySelectorAll("button").forEach((b) => b.classList.toggle("active", (b.dataset.on === "1") === (d.config.enabled !== false)))
+    $("bkKeep").value = d.config.keep ?? 14
+    $("bkEvery").value = d.config.intervalHours ?? 24
+    $("notifyUrl").value = d.notify?.url ?? ""
+    const row = $("bkListRow")
+    if ((d.backups ?? []).length) {
+      row.style.display = ""
+      $("bkList").innerHTML = d.backups.map((b) => `${b.name}（${(b.size / 1048576).toFixed(1)} MB）`).join("；")
+    } else { row.style.display = "none" }
+  } catch { /* 静默 */ }
+  __secDataCwd = sessions.find((s) => s.id === activeId)?.cwd ?? ""
+  $("alCwd").textContent = __secDataCwd.split(/[\\/]/).filter(Boolean).pop() || "（无）"
+  $("alCwd").title = __secDataCwd
+  try {
+    const al = await (await fetch(`/api/allowlist?cwd=${encodeURIComponent(__secDataCwd)}`)).json()
+    const ps = al.prefixes ?? []
+    $("alList").innerHTML = ps.length
+      ? ps.map((p) => `<span class="al-item">${esc(p)}<button data-p="${esc(p)}" class="al-del" title="删除">×</button></span>`).join("")
+      : `<span class="sd">暂无——确认弹窗里点「本项目总是允许」也会自动加进来</span>`
+    $("alList").querySelectorAll(".al-del").forEach((b) => b.onclick = async () => {
+      await fetch("/api/allowlist/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: __secDataCwd, prefix: b.dataset.p }) })
+      loadDataSec()
+    })
+  } catch { /* 静默 */ }
+  // T88 沙箱配置回填
+  try {
+    const sb = await (await fetch("/api/sandbox")).json()
+    $("sbDocker").textContent = sb.docker ? "已检测到 Docker" : "未检测到 Docker（开启后命令会回退本机执行）"
+    $("segSandbox").querySelectorAll("button").forEach((b) => b.classList.toggle("active", (b.dataset.on === "1") === (sb.config.enabled === true)))
+    $("sbImage").value = sb.config.image ?? "node:22-bookworm"
+  } catch { /* 静默 */ }
+  slideAllSegs() // T86：备份开关分段滑块同步
+}
+$("segBackup").querySelectorAll("button").forEach((b) => b.onclick = async () => {
+  await fetch("/api/backup/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: b.dataset.on === "1" }) })
+  loadDataSec()
+})
+$("bkSave").onclick = async () => {
+  await fetch("/api/backup/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keep: Number($("bkKeep").value) || 14, intervalHours: Number($("bkEvery").value) || 24 }) })
+  $("status").textContent = "备份设置已保存"
+  loadDataSec()
+}
+$("bkRun").onclick = async () => {
+  $("bkRun").textContent = "备份中…"
+  try {
+    const r = await (await fetch("/api/backup/run", { method: "POST" })).json()
+    $("status").textContent = r.ok ? `已备份：${r.name}` : `备份失败：${r.error}`
+  } catch { $("status").textContent = "备份失败" }
+  $("bkRun").textContent = "立即备份"
+  loadDataSec()
+}
+$("notifySave").onclick = async () => {
+  await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: $("notifyUrl").value.trim() }) })
+  $("status").textContent = "通知设置已保存"
+}
+$("alAdd").onclick = async () => {
+  const prefix = $("alPrefix").value.trim()
+  if (!prefix || !__secDataCwd) { $("status").textContent = "先选择一个会话再加白名单"; return }
+  await fetch("/api/allowlist/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: __secDataCwd, prefix }) })
+  $("alPrefix").value = ""
+  loadDataSec()
+}
+// T88 沙箱配置：开关 + 镜像
+$("segSandbox").querySelectorAll("button").forEach((b) => b.onclick = async () => {
+  await fetch("/api/sandbox/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: b.dataset.on === "1" }) })
+  loadDataSec()
+})
+$("sbSave").onclick = async () => {
+  await fetch("/api/sandbox/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: $("sbImage").value.trim() }) })
+  $("status").textContent = "沙箱配置已保存"
+  loadDataSec()
+}
 $("settingsBtn").onclick = () => {
   showPage("setPage")
   renderStatCard() // T44 使用统计卡：每次打开设置页按当前会话列表重算
   loadUsage() // T45 两张图：热力图 + 环形图（/api/usage/*，每次打开都拉最新）
   renderHooks() // T66 钩子列表：每次打开设置页拉最新开关状态
+  loadDataSec() // T83/T84/T85 备份 / 通知 / 白名单
+  // T70 配对 token：仅本机可取（/api/pair），供局域网设备配对
+  fetch("/api/pair").then((r) => r.json()).then((j) => { const t = j?.token ?? ""; $("pairToken").textContent = t ? t.slice(0, 4) + "…" + t.slice(-4) : "（本机不可用）"; $("pairToken").dataset.full = t }).catch(() => { $("pairToken").textContent = "（本机不可用）" })
   // T45 左类别栏：每次打开都回到「使用统计」顶部，避免上次的滚动位置让人摸不着头脑
   setActiveSec("secUsage")
   const sb = $("setBody")
@@ -4614,6 +5091,7 @@ function renderAssistMsg(m) {
   // T59：assistant 回复用与主对话同一套 fmtBlock 渲染（不再显示 * ### 等源码符号）；user/monitor 保持纯文本
   const body = m.role === "assistant" ? fmtBlock(m.content) : esc(m.content)
   div.innerHTML = `<div class="awho">${who}</div><div class="abody">${body}</div>`
+  hardenSvgBoxes(div) // 10.34 第二道闸：辅助对话的 svg 围栏同样清场
   box.appendChild(div)
   box.scrollTop = box.scrollHeight
 }

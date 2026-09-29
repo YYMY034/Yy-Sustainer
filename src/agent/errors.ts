@@ -218,13 +218,100 @@ export function retryBudget(kind: ErrKind): number {
   }
 }
 
-/** 把任意抛出物换成带真实原因的 Error（保留 name 便于上层判 abort） */
-export function asDiagnosedError(e: unknown): Error {
+/**
+ * 把任意抛出物换成带真实原因的 Error（保留 name 便于上层判 abort）。
+ * T91：可附带「本次失败前已执行的工具调用数」——重试前必须看它。
+ * 已产生副作用的回合（写过文件、跑过命令、发过请求）整轮重跑＝副作用重复，
+ * 上层据此放弃自动重发（见 gateway 的重试循环）。
+ */
+export function asDiagnosedError(e: unknown, extra?: { executedToolCalls?: number }): Error {
   const info = describeFailure(e)
   const out = new Error(info.message)
   out.name = String((e as Record<string, any>)?.name ?? "Error")
   ;(out as any).kind = info.kind
   ;(out as any).status = info.status
   ;(out as any).cause = e
+  const inherited = Number((e as Record<string, any>)?.executedToolCalls ?? 0)
+  ;(out as any).executedToolCalls = extra?.executedToolCalls ?? (Number.isFinite(inherited) ? inherited : 0)
   return out
+}
+
+/**
+ * T93 P3：判定一个错误是不是「上下文超出模型窗口」。
+ *
+ * 为什么要单独判：这类错误在 `describeFailure` 里会落进 `badrequest`，
+ * 于是 `retryBudget = 0`，提示文案是「请求被上游拒绝，通常是该模型不支持所选参数」——
+ * **病因完全不相干**。而它是长任务最常见的死法之一：`config.contextTokens`
+ * 是个手拍的值（默认 131072），配了 32k/8k 窗口的模型时压缩阈值形同虚设，
+ * 任务跑几十步后在某一部突然死掉，用户既不知道真实原因也不知道能做什么。
+ *
+ * 各家说法（OpenAI 兼容 / Anthropic / 国产通道都见过）：
+ *   - "This model's maximum context length is 8192 tokens..."
+ *   - code: "context_length_exceeded"
+ *   - "maximum context length" / "context window" / "too many tokens"
+ *   - "Request too large" / "payload too large" / HTTP 413
+ * 匹配刻意放宽：漏判的代价是任务白死，误判的代价只是多压一次（很便宜）。
+ */
+const CTX_OVERFLOW_PATTERNS = [
+  /context[_ ]?length/i,
+  /context window/i,
+  /maximum context/i,
+  /too many tokens/i,
+  /too long for model/i,
+  /request too large/i,
+  /payload too large/i,
+  /tokens? (?:exceed|limit)/i,
+  /exceeds? the (?:maximum|model)/i,
+  /reduce the length of the messages/i,
+]
+
+export function isContextOverflow(e: unknown): boolean {
+  const texts: string[] = []
+  let tooLarge = false
+  // 遍历整棵错误树收集字符串与 status。刻意放宽：真实错误结构千奇百怪
+  // （APICallError.statusCode / response.status / responseBody.error.message / lastError…），
+  // 漏判的代价是任务白死，误判的代价只是多压一次历史（很便宜）。
+  // 但要设上限——错误里可能挂着整个 responseBody。
+  const MAX_TEXTS = 200
+  const MAX_LEN = 2000
+  const walk = (x: unknown, depth = 0): void => {
+    if (depth > 6 || x == null || texts.length >= MAX_TEXTS) return
+    if (typeof x === "string") {
+      texts.push(x.slice(0, MAX_LEN))
+      return
+    }
+    if (typeof x === "number") return
+    if (Array.isArray(x)) {
+      for (const it of x) walk(it, depth + 1)
+      return
+    }
+    if (typeof x === "object") {
+      const o = x as Record<string, unknown>
+      for (const k of ["status", "statusCode"]) {
+        if (o[k] === 413 || o[k] === "413") tooLarge = true
+      }
+      // Error 的 message/name 是**不可枚举**的自有属性，Object.entries 看不到——
+      // 只靠 entries 会漏掉最常见的那一种（第一版就这么错的，实测漏掉了 asDiagnosedError 包过的错误）
+      for (const k of ["message", "name"]) {
+        if (typeof o[k] === "string") texts.push((o[k] as string).slice(0, MAX_LEN))
+      }
+      for (const [k, v] of Object.entries(o)) {
+        if (k === "stack") continue // 栈里全是源码文本，又长又无关
+        walk(v, depth + 1)
+      }
+    }
+  }
+  walk(e)
+  if (tooLarge) return true
+  return texts.some((t) => CTX_OVERFLOW_PATTERNS.some((re) => re.test(t)))
+}
+
+/** 给用户看的一句「超限了该怎么办」——带上当前估值，让人知道该调什么 */
+export function contextOverflowHint(contextTokens: number, compacted: boolean): string {
+  const tried = compacted ? "已自动压缩历史后重试，仍然超限" : "未做压缩"
+  return (
+    `上下文超出模型窗口（${tried}）。` +
+    `请把 config.contextTokens 调小到模型的真实窗口（当前估值 ${contextTokens}），` +
+    `或换用窗口更大的模型。长任务建议同时开启会话的长任务模式。`
+  )
 }

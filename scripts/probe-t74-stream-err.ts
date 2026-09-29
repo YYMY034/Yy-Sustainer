@@ -8,6 +8,11 @@
  */
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { streamText } from "ai"
+import { pickFreePort } from "./pick-port.js"
+
+/** 死端口用例的意图是「一个没有监听的端口」，不是 8899 这个具体号——
+ *  8899 被 IDE 自管 python 占过（check-t74 因此假红过），动态选。 */
+const DEAD_PORT = await pickFreePort()
 
 async function probe(name: string, baseURL: string, apiKey: string) {
   console.log(`\n=== ${name}  ${baseURL} ===`)
@@ -51,7 +56,7 @@ function describe(e: unknown): string {
 
 async function main() {
   // 1) 死端口（连接拒绝）—— 本地 8899 无监听
-  await probe("死端口", "http://127.0.0.1:8899/v1", "sk-x")
+  await probe("死端口", `http://127.0.0.1:${DEAD_PORT}/v1`, "sk-x")
   // 2) 域名解析不了
   await probe("坏域名", "http://no-such-host-yyagentd.invalid/v1", "sk-x")
 }

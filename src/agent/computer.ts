@@ -5,6 +5,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { runPowerShell } from "./ps.js"
 import { gate, type PermissionMode } from "./permissions.js"
+import { loadConfig } from "./config.js"
 import type { QuestionBroker } from "./ask.js"
 
 /**
@@ -217,6 +218,8 @@ export interface ComputerDeps {
   permission: () => PermissionMode
   /** 当前会话的问答 broker（交互模式下用来弹确认） */
   broker: () => QuestionBroker | undefined
+  /** T90：当前会话 id——桌面操控的授权按会话记（只问一次） */
+  sessionId: () => string | undefined
 }
 
 const MUTATING = new Set(["click", "drag", "type", "key"])
@@ -224,33 +227,42 @@ const MUTATING = new Set(["click", "drag", "type", "key"])
 export function makeComputerTool(deps: ComputerDeps): Tool {
   return tool({
     description:
-      "直接操控本机桌面（真实鼠标键盘，不是模拟 DOM）：点击/双击/右键、拖拽、滚动、输入文字、按组合键、切换前台窗口、截全屏并识图。用于操作没有可用 API 的本地程序（浏览器、桌面客户端）。" +
-      "坐标以屏幕左上角为原点、单位像素；拿不准坐标时先用 action=screen 截图，再按截图描述定位。点击/输入/按键会按权限档位请求确认。",
+      "直接操控本机桌面（真实鼠标键盘）：点击/双击/右键、拖拽、滚动、输入、组合键、切前台窗口、截全屏并识图。用于没有可用 API 的本地程序。坐标以屏幕左上角为原点（像素）；拿不准先用 action=screen 截图定位。点击/拖拽/输入/按键属危险操作：交互模式本会话首次确认一次，之后不再问（换权限档位需重新确认）；无人值守默认拒绝。",
     inputSchema: z.object({
       action: z
         .enum(["info", "screen", "windows", "focus", "move", "click", "drag", "scroll", "type", "key"])
         .describe("要执行的动作"),
-      x: z.number().int().optional().describe("屏幕 X 坐标（像素，左上角为 0）"),
-      y: z.number().int().optional().describe("屏幕 Y 坐标（像素，左上角为 0）"),
-      x2: z.number().int().optional().describe("drag 的终点 X"),
-      y2: z.number().int().optional().describe("drag 的终点 Y"),
+      x: z.number().int().optional().describe("X 坐标（像素）"),
+      y: z.number().int().optional().describe("Y 坐标（像素）"),
+      x2: z.number().int().optional().describe("drag 终点 X"),
+      y2: z.number().int().optional().describe("drag 终点 Y"),
       button: z.enum(["left", "right", "middle"]).optional().describe("鼠标键，默认 left"),
       count: z.number().int().min(1).max(3).optional().describe("点击次数，2 = 双击；默认 1"),
-      amount: z.number().int().optional().describe("scroll 的档数：正数向上滚、负数向下滚（1 档≈3 行）"),
-      text: z.string().optional().describe("type 要输入的文字（经剪贴板粘贴，会覆盖系统剪贴板；支持中文）"),
-      keys: z.string().optional().describe("key 的组合键，如 'ctrl+c'、'alt+tab'、'enter'、'ctrl+shift+s'"),
-      title: z.string().optional().describe("focus 要匹配的窗口标题片段（不区分大小写，子串匹配）"),
-      describe: z.boolean().optional().describe("screen 是否顺带用识图模型描述截图内容（默认 true；false 只存图不看）"),
+      amount: z.number().int().optional().describe("scroll 档数：正数向上、负数向下（1 档≈3 行）"),
+      text: z.string().optional().describe("type 要输入的文字（剪贴板粘贴，支持中文）"),
+      keys: z.string().optional().describe("组合键，如 ctrl+c / alt+tab / enter"),
+      title: z.string().optional().describe("focus 匹配的窗口标题片段（大小写不敏感）"),
+      describe: z.boolean().optional().describe("screen 是否顺带识图描述截图（默认 true）"),
     }),
     async execute(a) {
       const pos = a.x != null && a.y != null ? ` at ${a.x},${a.y}` : ""
       if (MUTATING.has(a.action)) {
+        // T90：真实鼠标键盘能做用户手动能做的一切（删文件、发消息、点掉确认框、下单），
+        // 历史版本恒传 danger:false，等于默认档下全程免确认。现在：
+        // - 交互模式：按危险操作处理，但同一会话只问一次（grantScope="computer"），
+        //   否则逐步点击都要确认，桌面自动化根本没法用；
+        // - 无人值守：默认拒绝（危险操作在无 TTY 下不能放行），确需无人值守桌面自动化
+        //   时把 config.computerUnattended 设为 true 显式开口。
+        const unattended = !deps.broker()
+        const allowUnattended = unattended && loadConfig().computerUnattended === true
         const denied = await gate({
           tool: "computer",
           summary: `${a.action} ${a.action === "type" ? JSON.stringify((a.text ?? "").slice(0, 60)) : a.action === "key" ? a.keys : `${a.button ?? "left"} ${pos}${a.action === "drag" ? ` -> ${a.x2},${a.y2}` : ""}`}`,
-          danger: false,
+          danger: !allowUnattended,
           mode: deps.permission(),
           broker: deps.broker(),
+          sessionId: deps.sessionId(),
+          grantScope: "computer",
         })
         if (denied) return denied
       }

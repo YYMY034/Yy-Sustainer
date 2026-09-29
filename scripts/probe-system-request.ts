@@ -8,6 +8,9 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { SYSTEM_PROMPT } from "../src/agent/prompt.js"
 import { loadInjection } from "../src/agent/inject.js"
 import { skillsPrompt } from "../src/skills/loader.js"
+import { pickFreePort } from "./pick-port.js"
+
+const PORT = await pickFreePort()
 
 let captured = ""
 const server = http.createServer((req, res) => {
@@ -23,7 +26,7 @@ const server = http.createServer((req, res) => {
     res.end()
   })
 })
-await new Promise((r) => server.listen(8897, "127.0.0.1", () => r(null)))
+await new Promise((r) => server.listen(PORT, "127.0.0.1", () => r(null)))
 
 // ① 与 loop.ts:262 同一拼接（同序、同函数）
 const injection = await loadInjection({ cwd: process.cwd(), model: "bai/qwen3.8-flash" })
@@ -32,7 +35,7 @@ console.log("① 拼接结果: SYSTEM_PROMPT", SYSTEM_PROMPT.length, "字 | inje
 console.log("   首行:", system.split("\n")[0])
 
 // ② 真实 HTTP 请求
-const p = createOpenAICompatible({ name: "probe", baseURL: "http://127.0.0.1:8897/v1", apiKey: "sk-probe" })
+const p = createOpenAICompatible({ name: "probe", baseURL: `http://127.0.0.1:${PORT}/v1`, apiKey: "sk-probe" })
 const t0 = Date.now()
 const r = streamText({
   model: p.chatModel("qwen3.8-flash"),
@@ -46,7 +49,7 @@ await new Promise((r2) => setTimeout(r2, 100))
 
 // ③ 检查请求体
 const body = JSON.parse(captured)
-const msgs = body.messages ?? []
+const msgs: Array<{ role?: string; content?: unknown }> = body.messages ?? []
 const sysMsgs = msgs.filter((m) => m.role === "system")
 const sys = sysMsgs.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n")
 console.log("③ 请求体: messages", msgs.length, "条 | system 消息", sysMsgs.length, "条 | 顶层 system 字段:", body.system !== undefined)

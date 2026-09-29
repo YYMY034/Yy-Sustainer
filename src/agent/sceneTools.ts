@@ -10,10 +10,29 @@ import { tool, type Tool } from "ai"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join, resolve, extname } from "node:path"
 import { loadConfig } from "./config.js"
-import { toolCtx } from "./tools.js"
+import { gateFileWrite } from "./permissions.js"
+import { effectivePermission, toolCtx } from "./tools.js"
 
 function currentCwd(): string {
   return toolCtx.getStore()?.cwd ?? process.cwd()
+}
+
+/**
+ * T93：写盘前的权限门——这四个工具（xlsx_write / docx_write / imggen / videogen）
+ * 都能 `resolve(cwd, path)` 后覆盖**任意路径**，却原来一处都没调 `gate()`：
+ * 比 `write` 少一道确认，等于给「绕开确认」留了个后门（想写盘又不想被问，换个工具名就行）。
+ * 统一走 permissions.ts 的 gateFileWrite，与 write/edit 共用同一套判定
+ * （工作区内不算危险、工作区外按危险操作且按目录粒度记会话授权）。
+ */
+async function gateWrite(tool: string, target: string): Promise<string | null> {
+  return gateFileWrite({
+    tool,
+    target,
+    cwd: currentCwd(),
+    mode: effectivePermission(),
+    broker: toolCtx.getStore()?.broker,
+    sessionId: toolCtx.getStore()?.sessionId,
+  })
 }
 
 // ---------- 表格：读取 ----------
@@ -78,6 +97,8 @@ export const xlsxWriteTool = tool({
     if (!Array.isArray(rows) || !rows.length) return "[失败] rows 必须是非空二维数组"
     const full = resolve(currentCwd(), p)
     const ext = extname(full).toLowerCase()
+    const denied = await gateWrite("xlsx_write", full)
+    if (denied) return denied
     try {
       const ExcelJS = (await import("exceljs")).default
       const wb = new ExcelJS.Workbook()
@@ -114,6 +135,8 @@ export const docxWriteTool = tool({
   async execute({ path: p, content, title }) {
     const full = resolve(currentCwd(), p)
     if (extname(full).toLowerCase() !== ".docx") return "[失败] 输出文件必须是 .docx"
+    const denied = await gateWrite("docx_write", full)
+    if (denied) return denied
     try {
       const docx = await import("docx")
       const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx
@@ -185,6 +208,11 @@ export const imggenTool = tool({
       order.push([name, pv])
     }
     if (!order.length) return "[失败] 尚未配置任何模型通道，请先在设置里添加模型"
+    // T93：**先问权限再生成**——生成完才被拒绝等于白花一次 token/额度。
+    // 输出路径只依赖 filename，可以提前定下来（默认名带时间戳，早算几毫秒无影响）。
+    const outPath = resolve(currentCwd(), filename || `generated-${Date.now()}.png`)
+    const denied = await gateWrite("imggen", outPath)
+    if (denied) return denied
     const errors: string[] = []
     for (const [name, pv] of order) {
       if (!pv.baseURL || pv.apiKey === "REPLACE_ME") continue
@@ -206,10 +234,9 @@ export const imggenTool = tool({
           if (!img.ok) { errors.push(`${name}: 图片下载失败 HTTP ${img.status}`); continue }
           buf = Buffer.from(await img.arrayBuffer())
         } else { errors.push(`${name}: 既无 b64 也无 url`); continue }
-        const out = resolve(currentCwd(), filename || `generated-${Date.now()}.png`)
-        mkdirSync(resolve(out, ".."), { recursive: true })
-        writeFileSync(out, buf)
-        return `[已生成] ${out}（${(buf.length / 1024).toFixed(0)} KB，通道 ${name}）`
+        mkdirSync(resolve(outPath, ".."), { recursive: true })
+        writeFileSync(outPath, buf)
+        return `[已生成] ${outPath}（${(buf.length / 1024).toFixed(0)} KB，通道 ${name}）`
       } catch (e) {
         errors.push(`${name}: ${(e as Error).message}`)
       }
@@ -237,6 +264,10 @@ export const videogenTool = tool({
     const cfg = loadConfig()
     const providers = Object.entries(cfg.providers)
     if (!providers.length) return "[失败] 尚未配置任何模型通道"
+    // T93：先问权限——这个工具轮询最长 8 分钟，生成完才被拒绝最亏
+    const outPath = resolve(currentCwd(), filename || `generated-${Date.now()}.mp4`)
+    const denied = await gateWrite("videogen", outPath)
+    if (denied) return denied
     const errors: string[] = []
     for (const [name, pv] of providers) {
       if (!pv.baseURL || pv.apiKey === "REPLACE_ME") continue
@@ -262,11 +293,10 @@ export const videogenTool = tool({
           const st = await q.json() as { output?: { task_status?: string; video_url?: string } }
           const status = st.output?.task_status
           if (status === "SUCCEEDED" && st.output?.video_url) {
-            const out = resolve(currentCwd(), filename || `generated-${Date.now()}.mp4`)
-            mkdirSync(resolve(out, ".."), { recursive: true })
+            mkdirSync(resolve(outPath, ".."), { recursive: true })
             const v = await fetch(st.output.video_url)
-            writeFileSync(out, Buffer.from(await v.arrayBuffer()))
-            return `[已生成] ${out}（通道 ${name}）`
+            writeFileSync(outPath, Buffer.from(await v.arrayBuffer()))
+            return `[已生成] ${outPath}（通道 ${name}）`
           }
           if (status === "FAILED") { errors.push(`${name}: 任务失败`); break }
         }

@@ -232,7 +232,14 @@ console.log("=== G. 桌面操控工具（T44-③）===")
   ok("G7 截图走识图模型", compSrc.includes("describeImage"))
   ok("G8 截屏可跳过识图", compSrc.includes("describe === false"))
   ok("G9 写入类动作受权限门控", compSrc.includes("MUTATING") && compSrc.includes('Set(["click", "drag", "type", "key"])'))
-  ok("G10 门控与 write/edit 同为 danger:false", compSrc.includes("danger: false"))
+  // T90 收口：写入类动作不再是 danger:false（那等于默认档下全程免确认——真实鼠标键盘能做用户手动能做的一切）。
+  // 现在按危险操作处理 + 会话级授权一次；无人值守默认拒绝，只有显式 computerUnattended 才开口。
+  ok(
+    "G10 写入类动作按危险处理 + 会话级授权（T90）",
+    compSrc.includes("danger: !allowUnattended") &&
+      compSrc.includes("computerUnattended === true") &&
+      compSrc.includes('grantScope: "computer"'),
+  )
   ok("G11 无 broker 时不挂起", compSrc.includes("broker: deps.broker()"))
   ok("G12 脚本落盘而非命令内联（躲开引号转义地狱）", compSrc.includes("writeFileSync(GUI_SCRIPT"))
   ok("G13 脚本版本变更会重写", compSrc.includes("includes(GUI_PS_VERSION)"))
