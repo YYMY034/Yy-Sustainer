@@ -327,8 +327,9 @@ async function runDaemonTask(t: DaemonTask): Promise<void> {
   } finally {
     taskRunning.delete(t.name)
     broadcast({ type: "tasks", tasks: taskListPayload() })
-    const { closeMcpTools } = await import("./mcp/client.js")
-    await closeMcpTools()
+    // T103：不再 closeMcpTools——网关是长驻进程，这里的全关会把**用户对话正在使用**的
+    // MCP 连接一起杀掉（定时任务收尾恰好撞上交互回合时，工具调用中途失败）。
+    // 连接按 cachedSig 复用、配置变更自动重载；坑 #6 的关闭是给 cli.ts 一次性进程准备的。
   }
 }
 

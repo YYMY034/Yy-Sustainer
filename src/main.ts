@@ -66,8 +66,22 @@ async function runOnce(task: Task): Promise<void> {
     }) + "\n")
   } finally {
     running.delete(task.name)
-    const { closeMcpTools } = await import("./mcp/client.js")
-    await closeMcpTools()
+    // T103：不再在任务收尾时 closeMcpTools——守护进程是**长驻**的，下一个任务/并发任务
+    // 还要复用这些连接；任务级全关会把并发任务的 MCP 连接一起杀掉（坑 #6 的 close
+    // 是给 cli.ts 那种一次性进程准备的，进程退出前才有必要）。
+  }
+}
+
+/** T103：网关是否在运行。网关内嵌了同一份 tasks.json 的调度器——
+ *  守护进程（npm start + pm2）和网关（watchdog 自动拉起）并存时，同一个 cron 刻钟
+ *  两个进程各跑一遍：双倍 token、双倍副作用、双份通知。网关活着时守护进程退让。 */
+async function gatewayActive(): Promise<boolean> {
+  const port = process.env.YYAGENT_GATEWAY_PORT ?? "8642"
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/api/state`, { signal: AbortSignal.timeout(1200) })
+    return r.ok
+  } catch {
+    return false
   }
 }
 
@@ -84,8 +98,11 @@ function cmdStart(): void {
       console.error(`bad cron for ${t.name}: ${t.cron}`)
       continue
     }
-    cron.schedule(t.cron, () => {
-      void runOnce(t)
+    cron.schedule(t.cron, async () => {
+      // T103：每个刻钟现探一次——网关可能在守护进程启动之后才被 watchdog 拉起来，
+      // 反之网关死了守护进程也要能自动接管，所以不能只在启动时判一次
+      if (await gatewayActive()) return
+      await runOnce(t)
     })
     scheduled++
     console.log(`scheduled: ${t.name} (${t.cron})`)
@@ -94,6 +111,9 @@ function cmdStart(): void {
     console.log("没有启用的任务，守护进程待机中（编辑 yyagentd.config.json 后重启生效）")
   }
   console.log("yyagentd running. Ctrl+C to stop.")
+  void gatewayActive().then((up) => {
+    if (up) console.log("检测到网关正在运行：定时任务由网关调度，本进程仅在网关离线时接管（防双跑）")
+  })
   setInterval(() => {}, 1 << 30)
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, () => process.exit(0))
