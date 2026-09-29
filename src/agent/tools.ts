@@ -60,6 +60,9 @@ export interface ToolContext {
   sessionId?: string
   /** T93：本轮的中止信号——delegate 要把它透传给子代理，否则主循环 abort 后子代理还在跑 */
   signal?: AbortSignal
+  /** T97：主回合的状态回吐口（网关的 onStatus 广播）。delegate 借它把子代理进度
+   *  顶到主对话的状态行上——原来子代理跑的时候主对话只看到 delegate 工具转圈，里面死活没人知道 */
+  statusSink?: (text: string) => void
 }
 
 export const toolCtx = new AsyncLocalStorage<ToolContext>()
@@ -89,6 +92,17 @@ const bgTasks = new Map<string, BgTask>()
 /** T92 上次清理后台日志目录的时间（节流用） */
 let lastBgSweep = 0
 
+/** T95：bg_read(wait) 的等待者。挂在任务 id 上，退出时逐个唤醒——
+ *  把「模型反复 bg_read 轮询」（每次轮询都是一步真实 LLM 调用）变成一次调用等到结果。 */
+const bgWaiters = new Map<string, Array<() => void>>()
+/** T95：任务所属会话。bg-exit 广播按 sessionId 路由（8.3：每条广播必须带 sessionId） */
+const bgSession = new Map<string, string | undefined>()
+/** T95：网关注册的退出回调。引擎侧不认识 WS，广播方向是网关反过来订阅 */
+const bgExitSubs: Array<(info: { id: string; sessionId?: string; exitCode?: number | null; command: string }) => void> = []
+export function onBgExit(cb: (info: { id: string; sessionId?: string; exitCode?: number | null; command: string }) => void): void {
+  bgExitSubs.push(cb)
+}
+
 function startBackground(command: string, cwd: string): string {
   // B1：id 从磁盘已有最大序号起步。用进程内计数器的话重启后又是 bg-1，
   // 会覆盖旧记录并和还在保留期内的 bg-1.log 错配。
@@ -113,6 +127,7 @@ function startBackground(command: string, cwd: string): string {
   child.stderr?.pipe(stream)
   const entry: BgTask = { pid: child.pid ?? 0, command, logFile, startedAt: Date.now(), done: false }
   bgTasks.set(id, entry)
+  bgSession.set(id, toolCtx.getStore()?.sessionId)
   // B1：元数据落盘——进程内 Map 重启即空，而日志还在，那时模型「看得到路径拿不到上下文」
   saveBgTask({ id, pid: entry.pid, command, logFile, cwd, startedAt: entry.startedAt })
   child.on("exit", (code) => {
@@ -120,6 +135,18 @@ function startBackground(command: string, cwd: string): string {
     entry.exitCode = code
     stream.end()
     saveBgTask({ id, pid: entry.pid, command, logFile, cwd, startedAt: entry.startedAt, endedAt: Date.now(), exitCode: code })
+    // T95：先定值再通知（8.3 的「先赋值再广播」原则在这里同样成立）——
+    // 等待者醒来后会立刻读 entry/bgTasks，那时状态必须是终态
+    const sid = bgSession.get(id)
+    bgSession.delete(id)
+    for (const cb of bgExitSubs) {
+      try { cb({ id, sessionId: sid, exitCode: code, command }) } catch { /* 某个订阅者炸了不拖累别人 */ }
+    }
+    const ws = bgWaiters.get(id)
+    if (ws) {
+      bgWaiters.delete(id)
+      for (const w of ws) w()
+    }
   })
   return id
 }
@@ -201,12 +228,14 @@ export const bashTool = tool({
 })
 
 export const bgReadTool = tool({
-  description: "查看后台任务：不传 task_id 列出全部任务状态（含网关重启前启动的）；传 task_id 读该任务日志尾部",
+  description: "查看后台任务：不传 task_id 列出全部任务状态（含网关重启前启动的）；传 task_id 读该任务日志尾部。任务还在跑时传 wait=true 挂起等它结束（省去反复轮询）",
   inputSchema: z.object({
     task_id: z.string().optional().describe("后台任务 id，如 bg-1"),
     lines: z.number().optional().describe("读取日志尾部行数，默认 40"),
+    wait: z.boolean().optional().describe("任务还在跑时挂起等它结束再返回（默认最多等 120 秒）"),
+    waitTimeoutMs: z.number().optional().describe("等待超时毫秒，默认 120000，上限 600000"),
   }),
-  async execute({ task_id, lines }) {
+  async execute({ task_id, lines, wait, waitTimeoutMs }) {
     if (!task_id) {
       // B1：磁盘 ∪ 内存。磁盘里有、内存里没有 = 网关重启前启动的任务——
       // 日志还在，只是本进程不知道它的退出码。**不猜**：进程没标结束就只说「状态未知」，
@@ -231,6 +260,33 @@ export const bgReadTool = tool({
       return rows.length ? rows.join("\n") : "暂无后台任务"
     }
     const e = bgTasks.get(task_id)
+    // T95：wait 模式——任务还在跑就挂起等退出事件（超时/abort 也会醒，醒来后走正常读取，
+    // 运行中就如实报运行中）。只对内存里有的任务生效：网关重启过的磁盘记录进程不在手上，等不了。
+    if (wait && e && !e.done) {
+      const timeoutMs = Math.min(Math.max(waitTimeoutMs ?? 120_000, 1000), 600_000)
+      const signal = toolCtx.getStore()?.signal
+      await new Promise<void>((resolve) => {
+        const w: { done: boolean } = { done: false }
+        const arr = bgWaiters.get(task_id) ?? []
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const finish = (): void => {
+          if (w.done) return
+          w.done = true
+          if (timer) clearTimeout(timer)
+          const cur = bgWaiters.get(task_id)
+          if (cur) {
+            const i = cur.indexOf(finish)
+            if (i >= 0) cur.splice(i, 1)
+            if (!cur.length) bgWaiters.delete(task_id)
+          }
+          resolve()
+        }
+        timer = setTimeout(finish, timeoutMs)
+        arr.push(finish)
+        bgWaiters.set(task_id, arr)
+        signal?.addEventListener("abort", finish, { once: true })
+      })
+    }
     // task_id 是模型给的输入——不合法就直接当「没这个任务」，绝不拿它拼路径
     const rec = getBgTask(task_id)
     const logFile = e?.logFile ?? rec?.logFile ?? bgLogPath(task_id)
@@ -649,6 +705,10 @@ export const delegateTool = tool({
         signal: store?.signal,
         sessionId: store?.sessionId,
         broker: store?.broker,
+        // T97：子代理每步进度顶到主对话状态行（带角色名与步数上限）。
+        // statusSink 来自主回合的 toolCtx——子代理自己的工具跑在自己嵌套的 ctx 里，不会串台
+        onStep: (info) =>
+          store?.statusSink?.(`[子代理 ${persona}] 第 ${info.step}/${info.maxSteps} 步${info.tools.length ? "：" + info.tools.join(",") : ""}`),
       })
       return subagentResult(r.text, r.steps, cap)
     } catch (e) {

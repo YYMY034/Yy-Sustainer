@@ -3702,6 +3702,10 @@ function connect() {
       if (!m.sessionId) { $("banner").style.display = "block"; $("banner").textContent = `出错：${m.message}` }
     }
     else if (m.type === "notice") { if (!m.sessionId || m.sessionId === activeId) { $("status").textContent = m.text; if (m.text === "已停止") $("banner").style.display = "none" } }
+    else if (m.type === "bg-exit") {
+      // T95：后台任务完成事件——一次性提示（顶栏语义），不再等 3s 轮询
+      if (!m.sessionId || m.sessionId === activeId) $("status").textContent = `后台任务 ${m.id} 已结束（code=${m.exitCode ?? "?"}）`
+    }
     else if (m.type === "assist") {
       // 按会话隔离：只处理当前会话的辅助消息（m.sessionId 为空 = 旧协议/质检兜底，也显示）
       const forMe = !m.sessionId || m.sessionId === activeId

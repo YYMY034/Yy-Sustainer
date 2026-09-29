@@ -45,7 +45,7 @@ import { WebSocketServer, WebSocket } from "ws"
 import { runAgentStream, compactNow, type AgentResult } from "./agent/loop.js"
 import { resolveMcpLoading } from "./mcp/intent.js"
 import { describeFailure, retryBudget, isContextOverflow, contextOverflowHint } from "./agent/errors.js"
-import { setSessionPermission, deleteSessionPermission, getSessionPermission } from "./agent/tools.js"
+import { setSessionPermission, deleteSessionPermission, getSessionPermission, onBgExit } from "./agent/tools.js"
 import { runBackupNow, listBackups, startBackupSchedule } from "./agent/backup.js"
 import { allowlistKeyFor } from "./agent/permissions.js"
 import { dockerAvailable } from "./agent/sandbox.js"
@@ -180,6 +180,13 @@ function broadcast(msg: Record<string, unknown>): void {
     if (c.readyState === WebSocket.OPEN) c.send(s)
   }
 }
+
+// T95：后台任务完成 → 事件广播。引擎在任务退出时回调这里（引擎侧不认识 WS），
+// 前端不用再等 3s 轮询才知道后台命令跑完了。会话外的任务（拆分器等内部调用）没有收件人，不广播。
+onBgExit((info) => {
+  if (!info.sessionId) return
+  broadcast({ type: "bg-exit", sessionId: info.sessionId, id: info.id, exitCode: info.exitCode ?? null })
+})
 
 /** T93 P3：会话已消耗的 token（输入 + 输出）。缓存命中不计——它不额外花钱。 */
 function sessionTokensUsed(usage: { in: number; out: number } | undefined): number {

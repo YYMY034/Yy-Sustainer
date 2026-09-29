@@ -286,7 +286,7 @@ async function runConverge(
   ]
   let steps = 0
   const result = toolCtx.run(
-    { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal },
+    { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal, statusSink: (s: string) => handlers.onStatus?.(s) },
     () =>
       streamText({
         model: prep.model,
@@ -538,7 +538,7 @@ export async function runAgentStream(
   const t0 = Date.now()
   // T93：compactedStored 不是 AI SDK 选项，展开前摘掉；它随 AgentResult 回传给调用方落库
   const { compactedStored, ...modelOpts } = prep
-  const ctx = { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal }
+  const ctx = { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal, statusSink: (s: string) => handlers.onStatus?.(s) }
   handlers.onStatus?.("思考中")
   let steps = 0
   // T91：已发起过的工具调用数。一旦 > 0，本次回合就可能已经产生副作用（写盘/执行命令/发请求），

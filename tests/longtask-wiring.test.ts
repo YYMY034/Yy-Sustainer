@@ -235,8 +235,14 @@ test("delegate 给子代理透传 signal / sessionId / broker", () => {
 })
 
 test("三处 toolCtx.run 的上下文都带上 signal", () => {
-  const n = count(loop, /sessionId: opts\.sessionId, signal: opts\.signal \}/g)
+  // T97 起 runAgentStream/runConverge 的 ctx 末尾多了 statusSink——pattern 放宽到 [,}]，意图不变
+  const n = count(loop, /sessionId: opts\.sessionId, signal: opts\.signal(,| \})/g)
   assert.equal(n, 3, `有 ${n} 处 toolCtx 上下文带了 signal，应为 3（runAgent / runAgentStream / runConverge）`)
+})
+
+test("流式两处的 toolCtx 上下文带上 statusSink（T97 子代理进度回传的通路）", () => {
+  const n = count(loop, /statusSink: \(s: string\) => handlers\.onStatus\?\.\(s\)/g)
+  assert.equal(n, 2, `有 ${n} 处 ctx 带 statusSink，应为 2（runAgentStream / runConverge）`)
 })
 
 test("toCoreMessages 带上 ts（压缩写回要靠它定位顺序）", () => {
