@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    # 仓库是 Windows 优先（PowerShell/路径/USERPROFILE 隔离的测试写法），
+    # 单测和类型检查在 windows runner 上跑与开发机同构
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      # 全量 check-*(1093+ 项)依赖本机环境（网关冒烟、Electron、PowerShell 行为），
+      # CI 只跑平台无关的类型检查 + 单测；行为回归仍是本机五件套的职责（8.10）
+      - run: npm test
