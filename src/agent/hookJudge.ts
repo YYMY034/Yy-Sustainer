@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { loadConfig, resolveModel, type HookConfig } from "./config.js"
+import { loadConfig, resolveModel, internalProviderOptions, type HookConfig } from "./config.js"
 import { composeSystem } from "./prompt.js"
 
 /**
@@ -83,8 +83,10 @@ export class LlmHookJudge implements HookJudge {
     const cfg = loadConfig()
     let client: ReturnType<typeof createOpenAICompatible>
     let modelId: string
+    let providerName = ""
     try {
       const resolved = resolveModel(cfg, cfg.model)
+      providerName = resolved.providerName
       client = createOpenAICompatible({ name: resolved.providerName, baseURL: resolved.provider.baseURL, apiKey: resolved.provider.apiKey })
       modelId = resolved.modelId
     } catch {
@@ -97,6 +99,8 @@ export class LlmHookJudge implements HookJudge {
     try {
       const r = await generateText({
         model: client.chatModel(modelId),
+        // T115：钩子判定是内部单一职责调用 → reasoning 降 low 档（每步工具一次，省延迟与 token）
+        providerOptions: internalProviderOptions(providerName),
         system: composeSystem({
           compactBase: true,
           role:

@@ -133,7 +133,10 @@ try {
   note(`最终回复 ${String(last?.content ?? "").length} 字`)
 
   check("任务跑完了", !!last && last.content.trim().length > 20, JSON.stringify(String(last?.content ?? "").slice(0, 120)))
-  check("步数足够多（长任务）", (usage?.steps ?? 0) >= 15, `${usage?.steps} 步`)
+  // T115：步数下限从 15 降到 5——高效模型会批量读文件（step-3.7-flash 实测 7 步完成
+  // 旧模型 30 步的任务），断言的意图是「任务是多步形状」而不是「步数必须多」；
+  // 压缩/ctxPct/记账的断言才是本探针的主目标
+  check("步数足够多（长任务）", (usage?.steps ?? 0) >= 5, `${usage?.steps} 步`)
   check("token 记账非零", (usage?.in ?? 0) > 0 && (usage?.out ?? 0) > 0)
   check("ctxPct 有真实读数", typeof f.meta.ctxPct === "number" && (f.meta.ctxPct as number) >= 0, `${f.meta.ctxPct}%`)
   check("实时 step 事件收到了", stepEvents.length > 0, `${stepEvents.length} 条`)

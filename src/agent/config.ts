@@ -357,6 +357,17 @@ export function resetConfigCache(): void {
   cached = null
 }
 
+/**
+ * T115：内部单一职责调用的推理档位。reasoning 模型的思考在「一次调用一个判定」的场景
+ * （钩子判定 / 压缩摘要 / 识图转述 / 任务拆分）是纯延迟 + token 开销——实测每次内部调用
+ * 的 reasoning 输出上百 token、延迟翻倍。low 档保判定可用（L2 一致率不塌方验证后接入）；
+ * **主对话永远保持服务端默认档**，不设限。key 必须与 createOpenAICompatible 的 name 一致
+ * （providerOptions 按它路由到请求体）。
+ */
+export function internalProviderOptions(providerName: string): Record<string, { reasoningEffort: string }> {
+  return { [providerName]: { reasoningEffort: "low" } }
+}
+
 export function loadConfig(): YyagentConfig {
   if (cached) return cached
   if (!existsSync(CONFIG_PATH)) {

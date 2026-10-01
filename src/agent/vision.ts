@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { generateText } from "ai"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
-import { loadConfig, resolveModel } from "./config.js"
+import { loadConfig, resolveModel, internalProviderOptions } from "./config.js"
 import { composeSystem } from "./prompt.js"
 
 const IMG_RE = /\.(png|jpe?g|webp|gif|bmp)$/i
@@ -35,6 +35,8 @@ export async function describeImageBase64(b64: string, visionModelSpec?: string)
   const prov = createOpenAICompatible({ name: providerName, baseURL: provider.baseURL, apiKey: provider.apiKey })
   const r = await generateText({
     model: prov.chatModel(modelId),
+    // T115：识图转述是内部单一职责调用 → reasoning 降 low 档
+    providerOptions: internalProviderOptions(providerName),
     // T91：识图转述是内部单一职责调用 → 精简基础层；严格输出契约（只转述、不额外发挥）放 role 槽
     system: composeSystem({
       compactBase: true,

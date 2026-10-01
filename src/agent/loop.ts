@@ -1,6 +1,6 @@
 import { generateText, streamText, stepCountIs, type CoreMessage, type Tool, type ToolSet, type StopCondition } from "ai"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
-import { loadConfig, resolveModel } from "./config.js"
+import { loadConfig, resolveModel, internalProviderOptions } from "./config.js"
 import { composeSystem } from "./prompt.js"
 import { asDiagnosedError } from "./errors.js"
 import { makeTools, toolCtx } from "./tools.js"
@@ -212,6 +212,8 @@ async function compactHistory(
     const transcript = fitTranscript(old.map((m) => `${m.role}: ${contentToText(m.content)}`).join("\n\n"))
     const r = await generateText({
       model: p.chatModel(modelId),
+      // T115：压缩是内部单一职责调用 → reasoning 降 low 档（摘要不需要深度推理）
+      providerOptions: internalProviderOptions(providerName),
       // T91：压缩是内部单一职责调用 → 走精简基础层（完整层 18k 字符 ≈ 11k tokens，一次摘要不值得付这个钱）；
       // 指令进 system 的 role 槽（后置 + 作用域声明），prompt 只放数据
       system: composeSystem({
@@ -249,6 +251,8 @@ interface Prepared {
   maxSteps: number
   /** T93：本轮发生过压缩时的落库形态历史（摘要 + 保留的最近消息），未压缩为 undefined */
   compactedStored?: StoredLike[]
+  /** T115：内部调用（compactBase）的推理档位透传，主对话为 undefined */
+  providerOptions?: Record<string, { reasoningEffort: string }>
 }
 
 /**
@@ -490,6 +494,8 @@ async function prepare(
     system,
     messages,
     tools,
+    // T115：内部单一职责调用（compactBase：拆分器等）→ reasoning 降 low 档；主对话不设限
+    ...(opts.compactBase ? { providerOptions: internalProviderOptions(providerName) } : {}),
     stopWhen: [
       stepCountIs(opts.maxSteps ?? config.maxSteps ?? 50),
       // T85：长任务模式按会话覆盖收敛阈值（opts 优先，默认 3 分钟）
