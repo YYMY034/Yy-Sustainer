@@ -412,6 +412,10 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
       ? setTimeout(() => {
           timedOut = true
           broadcast({ type: "status", sessionId, text: `已超时（${Math.round(interactiveTimeoutMs / 1000)} 秒），正在收尾` })
+          // T115：先解除挂起的提问再 abort——模型发起过确认/提问且无人应答时，tool 卡在
+          // broker.ask 上，光 abort 流它永远不会结束（评测首日抓到的死锁：超时后永远收不了尾）。
+          // cancel 按默认项（T90 起 = 拒绝）应答，工具随即返回，abort 才真正生效。
+          brokers.get(sessionId)?.cancel()
           ac.abort(new Error(`interactive-timeout:${interactiveTimeoutMs}`))
         }, interactiveTimeoutMs)
       : undefined
@@ -532,6 +536,8 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
                 budgetStopped = true
                 const used = sessionTokensUsed(meta.usage) + turnTokens.in + turnTokens.out
                 broadcast({ type: "notice", sessionId, text: budgetExceededNotice(used, budgetCap, "during") })
+                // T115：同交互超时——先解除挂起的提问，abort 才能真正穿透卡在 broker.ask 上的工具
+                brokers.get(sessionId)?.cancel()
                 ac.abort(new Error(`budget-exceeded:${budgetCap}`))
                 return
               }

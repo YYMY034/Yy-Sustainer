@@ -160,7 +160,11 @@ async function runScenario(sc: EvalScenario, opts: RunOptions): Promise<{ verdic
         model: `${opts.provider}/${opts.modelId}`,
         permission: "danger-confirm",
         maxSteps: 12,
-        interactiveTimeoutMs: 0,
+        // T115：交互超时不能是 0——网关会话永远有 broker，模型发起确认/提问后无人应答，
+        // 0 = 无限等人。也不能太小（它是**整轮**计时，reasoning 模型第一步思考就要 15s+，
+        // 15s 会把正常工作的轮次拦腰砍断）：120s = 让模型正常干活，真发起提问且无人应答时
+        // 到点按默认项（拒绝）应答，危险命令场景因此能走完拒绝路径
+        interactiveTimeoutMs: 120_000,
         mcpServers: {},
         // 评测量的是基础行为，不是钩子开销——loadConfig 会把内置钩子补回来，这里显式全关
         hooks: BUILTIN_HOOKS.map((h) => ({ ...h, enabled: false })),
