@@ -46,6 +46,7 @@ import { runAgentStream, compactNow, type AgentResult } from "./agent/loop.js"
 import { resolveMcpLoading } from "./mcp/intent.js"
 import { describeFailure, retryBudget, isContextOverflow, contextOverflowHint } from "./agent/errors.js"
 import { setSessionPermission, deleteSessionPermission, getSessionPermission, onBgExit, listBgSnapshot, bgLogTailById } from "./agent/tools.js"
+import { buildDiagnostics } from "./gateway/diagnostics.js"
 import { runBackupNow, listBackups, startBackupSchedule } from "./agent/backup.js"
 import { allowlistKeyFor } from "./agent/permissions.js"
 import { dockerAvailable } from "./agent/sandbox.js"
@@ -63,6 +64,7 @@ import {
   toCoreMessages,
   truncateFrom,
   repairIndex,
+  archiveStaleSessions,
   type StoredMessage,
 } from "./session/store.js"
 // T93 P1 轮内 checkpoint：长任务被进程杀掉时，已流出的正文与工具步骤是唯一的线索
@@ -1771,6 +1773,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   if (m === "GET" && p === "/api/tasks") return json(res, 200, taskListPayload())
   // T99：后台任务面板——列表（内存 ∪ 磁盘快照）+ 日志尾（id 校验在引擎侧）
   if (m === "GET" && p === "/api/bg") return json(res, 200, { tasks: listBgSnapshot() })
+  // T110：诊断导出（新模块 src/gateway/diagnostics.ts——gateway 拆分的第一块；输出全红acted）
+  if (m === "GET" && p === "/api/diagnostics") return json(res, 200, buildDiagnostics({ logsDir: LOGS_DIR }))
   if (m === "GET" && p === "/api/bg/log") {
     const id = url.searchParams.get("id")?.trim() ?? ""
     const tail = id ? bgLogTailById(id) : null
@@ -2753,6 +2757,18 @@ export function startGateway(port = PORT): void {
       }
     } catch {
       /* 索引修复失败不影响启动 */
+    }
+    // T111：会话归档——config.sessionArchiveDays > 0 时启动清扫一次（移动到 archive/，不删除）
+    try {
+      const days = loadConfig().sessionArchiveDays ?? 0
+      if (days > 0) {
+        const arch = archiveStaleSessions(days)
+        if (arch.archived > 0) {
+          console.log(`[会话] 已归档 ${arch.archived} 个超过 ${days} 天未活动的会话到 sessions/archive/（文件保留，可手动挪回）`)
+        }
+      }
+    } catch {
+      /* 归档失败不影响启动 */
     }
     // T45 用量账本一次性回填：把账本上线前各会话的累计 usage 摊到消息所在的天（幂等，见 usage.ts）
     try {

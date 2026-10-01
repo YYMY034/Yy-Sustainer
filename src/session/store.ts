@@ -218,6 +218,37 @@ export function deleteSession(id: string): void {
   }
 }
 
+/**
+ * T111：会话归档——把超过 days 天未活动的会话移入 sessions/archive/ 并从 index 剔除。
+ * **是移动不是删除**（文件式一切：数据可见可捞，归档文件随时能手动挪回来）；
+ * rename 失败时文件留在原地，下次启动 repairIndex 会自动把它补回 index（自愈路径天然成立）。
+ */
+export function archiveStaleSessions(days: number): { archived: number; ids: string[] } {
+  if (!(days > 0)) return { archived: 0, ids: [] }
+  const cutoff = Date.now() - days * 86_400_000
+  const ids: string[] = []
+  mutateIndex((list) => {
+    const keep: SessionMeta[] = []
+    for (const s of list) {
+      if ((s.updatedAt ?? 0) < cutoff) ids.push(s.id)
+      else keep.push(s)
+    }
+    return keep
+  })
+  if (ids.length) {
+    const dir = join(ROOT, "archive")
+    mkdirSync(dir, { recursive: true })
+    for (const id of ids) {
+      try {
+        renameSync(join(ROOT, `${id}.json`), join(dir, `${id}.json`))
+      } catch {
+        /* 移不动就留在原地：index 已剔，repairIndex 下次自愈 */
+      }
+    }
+  }
+  return { archived: ids.length, ids }
+}
+
 export interface RepairResult {
   /** index 里指向不存在文件的条目（已剔除） */
   dropped: number

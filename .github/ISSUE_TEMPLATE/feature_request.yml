@@ -1,0 +1,25 @@
+name: 功能建议
+description: 提出一个新能力或改进
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+      description: 你想完成什么？现在是怎么绕的？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望方案
+      description: 大概的形态即可，不必是实现细节
+    validations:
+      required: true
+  - type: checkboxes
+    id: local-first
+    attributes:
+      label: 确认
+      options:
+        - label: 我理解本项目是本地优先设计，不接受需要云端依赖的方案
+          required: true

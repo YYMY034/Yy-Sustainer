@@ -1,0 +1,45 @@
+name: Bug 报告
+description: 报告一个可以复现的问题
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: 报障前请先试「设置页 → 数据与安全 → 下载诊断」，把生成的 JSON 作为附件（已脱敏，不含密钥与对话内容）。
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 期望的行为 vs 实际的行为
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开…
+        2. 点击…
+        3. 看到…
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 设置页可见，或诊断 JSON 的 version 字段
+    validations:
+      required: true
+  - type: dropdown
+    id: form
+    attributes:
+      label: 使用形态
+      options:
+        - Web/Electron 客户端
+        - TUI（终端）
+        - 无头 CLI / 定时任务
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 诊断 JSON（可选但强烈建议）

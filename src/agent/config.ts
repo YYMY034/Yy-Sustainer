@@ -182,6 +182,8 @@ export interface YyagentConfig {
    * 预算和主代理不是同一个概念。用满时 delegate 会在返回里明确标注截断。
    */
   subagentMaxSteps?: number
+  /** T111：会话归档天数——超过 N 天未活动的会话在网关启动时移入 sessions/archive/（不删除，0/未配=关闭） */
+  sessionArchiveDays?: number
   /** T30 收敛时限（毫秒）：单个 run 连续运转超过此时长，引擎强制停轮并引导模型进入验证与收尾，默认 180000（3 分钟） */
   convergeTimeoutMs?: number
   permission?: "confirm-all" | "danger-confirm" | "full-auto"

@@ -1376,6 +1376,10 @@
           <div class="seg" id="segBackup"><button data-on="1">开启</button><button data-on="0">关闭</button></div>
         </div>
         <div class="set-row">
+          <div class="sl">诊断导出<div class="sd">生成一份脱敏的诊断 JSON（版本/配置摘要/会话统计/最近失败任务），报障时附上它——不含密钥、token 和任何对话内容</div></div>
+          <button class="abtn" id="diagBtn">下载诊断</button>
+        </div>
+        <div class="set-row">
           <div class="sl">保留份数 / 备份间隔（小时）</div>
           <div class="bk-fields">
             <input id="bkKeep" type="number" min="1" max="90"><input id="bkEvery" type="number" min="1" max="720">
@@ -2473,7 +2477,14 @@ function render() {
     // 撤回/编辑只挂最后一条用户消息（更早的已是定局历史，撤回会连坐删回复）
     let lastUserIdx = -1
     for (let i = messages.length - 1; i >= 0; i--) { if (messages[i].role === "user" && !messages[i].archived) { lastUserIdx = i; break } }
-    const body = messages.map((m, i) => {
+    // T111：长会话渲染上限——全量 map 在几千条消息时 innerHTML 重绘会卡死。
+    // 默认只画最后 200 条，头部给「显示全部」（用户主动选择才全量）；保留原始下标，
+    // 后面的 divider/昵称逻辑照旧按全数组索引工作
+    const RENDER_CAP = 200
+    const from = window.__showAllMsgs || messages.length <= RENDER_CAP ? 0 : messages.length - RENDER_CAP
+    const capNote = from > 0 ? `<div class="archived-divider">已折叠较早的 ${from} 条消息 · <a href="#" data-op="showAllMsgs" style="text-decoration:underline;">显示全部</a></div>` : ""
+    const body = messages.slice(from).map((m, idx) => {
+      const i = from + idx
       // 昵称：assistant 显示本次实际使用的模型名（旧消息回退到会话/全局模型）
       const who = m.role === "user" ? "你" : modelShort(m.model ?? currentModel)
       const arch = m.archived ? " archived" : ""
@@ -4352,6 +4363,14 @@ function renderBgPanel() {
   }).join("")
 }
 document.addEventListener("click", (e) => {
+  // T111：「显示全部」——长会话渲染上限的逃生门（展开后本次会话视图内保持全量）
+  const showAll = e.target && e.target.closest ? e.target.closest('[data-op="showAllMsgs"]') : null
+  if (!showAll) return
+  e.preventDefault()
+  window.__showAllMsgs = true
+  render()
+})
+document.addEventListener("click", (e) => {
   const btn = e.target && e.target.closest ? e.target.closest("[data-bglog]") : null
   if (!btn) return
   const id = btn.getAttribute("data-bglog") || ""
@@ -4707,6 +4726,19 @@ $("bkSave").onclick = async () => {
   await fetch("/api/backup/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keep: Number($("bkKeep").value) || 14, intervalHours: Number($("bkEvery").value) || 24 }) })
   $("status").textContent = "备份设置已保存"
   loadDataSec()
+}
+$("diagBtn").onclick = async () => {
+  // T110：诊断导出——拉 JSON 存为文件（不用 window.open，避免浏览器直接渲染 JSON 视图）
+  try {
+    const data = await (await fetch("/api/diagnostics")).json()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
+    const a = document.createElement("a")
+    a.href = URL.createObjectURL(blob)
+    a.download = `yy-sustainer-diagnostics-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(a.href)
+    $("status").textContent = "诊断文件已下载"
+  } catch (e) { $("status").textContent = `诊断导出失败：${e.message}` }
 }
 $("bkRun").onclick = async () => {
   $("bkRun").textContent = "备份中…"

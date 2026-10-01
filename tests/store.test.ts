@@ -12,6 +12,7 @@ import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "no
 import { homedir } from "node:os"
 import { join } from "node:path"
 import {
+  archiveStaleSessions,
   createSession,
   deleteSession,
   listSessions,
@@ -146,6 +147,29 @@ test("truncateFrom 按 ts 截断，找不到返回 undefined", () => {
   ]
   assert.deepEqual(truncateFrom(msgs, 3)?.map((m) => m.content), ["a", "b"])
   assert.equal(truncateFrom(msgs, 999), undefined)
+})
+
+test("archiveStaleSessions：超期会话移入 archive/ 并剔出 index，不删除（T111）", () => {
+  reset()
+  const a = createSession("C:\\p", undefined, "A")
+  const b = createSession("C:\\p", undefined, "B")
+  // 把 A 的 updatedAt 拨到 30 天前
+  const fa = loadSession(a.id)!
+  persist({ ...fa.meta, updatedAt: Date.now() - 30 * 86_400_000 }, fa.messages)
+
+  const r = archiveStaleSessions(7)
+  assert.equal(r.archived, 1)
+  assert.deepEqual(r.ids, [a.id])
+  assert.equal(loadSession(a.id), undefined, "主目录里应该已经移走")
+  const archFile = join(SESSIONS, "archive", `${a.id}.json`)
+  assert.ok(existsSync(archFile), "归档文件应存在（移动不是删除）")
+  const arch = JSON.parse(readFileSync(archFile, "utf8"))
+  assert.ok(Array.isArray(arch.messages), "归档文件内容完整")
+  assert.ok(loadSession(b.id), "未过期会话不受影响")
+
+  // days<=0 是显式关闭，一个都不动
+  const r0 = archiveStaleSessions(0)
+  assert.equal(r0.archived, 0)
 })
 
 test("repairIndex：剔除 index 里有、磁盘上没有的条目", () => {
