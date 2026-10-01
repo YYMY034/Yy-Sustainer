@@ -27,6 +27,30 @@ import type { HookVerdict, JudgeInput } from "../src/agent/hookJudge.js"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+// T104：--model provider/modelId —— 用真模型跑「现 llm 后端 vs 人工标注」的真实一致率
+// （默认沙箱 provider 不可达，只能出「候选没判」）。必须赶在 HOME 重定向**前**读真配置：
+// loadConfig 有进程级缓存，读完立即重置，后面沙箱里的 loadConfig 才能读到沙箱配置。
+const modelArg = (() => {
+  const a = process.argv.slice(2)
+  const i = a.indexOf("--model")
+  return i >= 0 && a[i + 1] && !a[i + 1].startsWith("--") ? a[i + 1] : null
+})()
+let realProvider: { baseURL: string; apiKey: string } | null = null
+let realModelId = ""
+if (modelArg) {
+  const slash = modelArg.indexOf("/")
+  const { loadConfig, resetConfigCache } = await import("../src/agent/config.js")
+  const cfg = loadConfig()
+  const p = cfg.providers?.[modelArg.slice(0, slash)]
+  if (!p?.baseURL || !p.apiKey) {
+    console.error(`--model：config 里没有 ${modelArg} 对应 provider 的 baseURL/apiKey`)
+    process.exit(2)
+  }
+  realProvider = { baseURL: p.baseURL, apiKey: p.apiKey }
+  realModelId = modelArg.slice(slash + 1)
+  resetConfigCache()
+}
+
 // 先设 HOME 再动态 import——被测模块加载时就用 homedir() 定路径（活体探针的教训）
 const HOME = mkdtempSync(join(tmpdir(), "yy-ab-"))
 process.env.HOME = HOME
@@ -130,8 +154,10 @@ try {
   mkdirSync(join(HOME, ".yyagent"), { recursive: true })
   const cfg = JSON.parse(
     JSON.stringify({
-      providers: { p: { baseURL: "http://127.0.0.1:1/v1", apiKey: "k" } },
-      model: "p/m",
+      providers: realProvider
+        ? { p: { baseURL: realProvider.baseURL, apiKey: realProvider.apiKey } }
+        : { p: { baseURL: "http://127.0.0.1:1/v1", apiKey: "k" } },
+      model: realProvider ? `p/${realModelId}` : "p/m",
       hooks: HOOK_IDS.map((id) => ({ id, name: id, enabled: true, prompt: HOOK_PROMPTS[id] })),
     }),
   ) as Record<string, unknown>

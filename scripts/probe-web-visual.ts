@@ -46,6 +46,7 @@ interface ShotResult {
     composerVisible: boolean
     hasMessages: boolean
     settingsShown: boolean
+    isLight: boolean
     pageErrors: string[]
   }
 }
@@ -85,7 +86,7 @@ try {
     `--base=${BASE}`,
     `--out=${OUT}`,
     `--json=${resultsFile}`,
-    "--views=main,settings",
+    "--views=main,settings,main-dark",
   ], { cwd: REPO, stdio: ["ignore", "pipe", "pipe"] })
   let shotStderr = ""
   child.stderr?.on("data", (d) => { shotStderr += String(d) })
@@ -108,7 +109,8 @@ try {
 
   const main = results.find((r) => r.view === "main")
   const settings = results.find((r) => r.view === "settings")
-  check("两个视图都渲染成功（无 electron 异常）", !main?.error && !settings?.error, `${main?.error ?? ""}${settings?.error ?? ""}${shotStderr.slice(0, 200)}`)
+  const dark = results.find((r) => r.view === "main-dark")
+  check("三个视图都渲染成功（无 electron 异常）", !main?.error && !settings?.error && !dark?.error, `${main?.error ?? ""}${settings?.error ?? ""}${dark?.error ?? ""}${shotStderr.slice(0, 200)}`)
 
   if (main?.geo) {
     const g = main.geo
@@ -123,7 +125,14 @@ try {
     check("设置页无横向溢出", g.scrollW <= g.innerW, `scrollW=${g.scrollW} innerW=${g.innerW}`)
     check("设置页零页面 JS 错误", (g.pageErrors?.length ?? 0) === 0, JSON.stringify(g.pageErrors ?? []))
   }
-  for (const r of [main, settings]) {
+  if (dark?.geo) {
+    const g = dark.geo
+    check("暗色主题真的切过去了（html 无 light 类）", g.isLight === false, `isLight=${g.isLight}`)
+    check("暗色视图无横向溢出", g.scrollW <= g.innerW, `scrollW=${g.scrollW} innerW=${g.innerW}`)
+    check("暗色视图 composer 仍在视口内", g.composerVisible === true)
+    check("暗色视图零页面 JS 错误", (g.pageErrors?.length ?? 0) === 0, JSON.stringify(g.pageErrors ?? []))
+  }
+  for (const r of [main, settings, dark]) {
     if (r?.file) {
       const sz = statSync(r.file, { throwIfNoEntry: false })?.size ?? 0
       check(`截图落盘且非空（${r.view}）`, existsSync(r.file) && sz > 10_000, `${r.file} ${sz}B`)

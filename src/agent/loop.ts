@@ -92,6 +92,8 @@ export interface AgentResult {
   compactedStored?: StoredLike[]
   /** T101：原生思考全文（provider reasoning 流累积）。仅流式主回合有；网关落库时前置 <thinking> 块 */
   reasoningText?: string
+  /** T106：逐工具明细（generateText 的 steps 展开）。子代理回显升级用，流式主回合不产（工具事件走 onToolEvent） */
+  toolDetail?: Array<{ name: string; args: string; output: string }>
 }
 
 export type StreamHandlers = {
@@ -524,6 +526,23 @@ export async function runAgent(prompt: string, opts: AgentOptions = {}): Promise
     }),
   )
   const u = result.usage
+  // T106：逐工具明细（docs/70 方向 B）。子代理的回显从「bash×2」升级到逐行
+  // 「工具 · 参数摘要 → 输出摘要」，主代理的历史回看不再是黑盒。按 toolCallId 配对，
+  // 不按下标——两个同名工具在同一并发批里时下标会错配。
+  const toolDetail = (result.steps ?? []).flatMap((s) => {
+    const calls = (s.toolCalls ?? []) as Array<{ toolCallId?: string; toolName?: string; input?: unknown }>
+    const outs = new Map<string, unknown>()
+    for (const r of (s.toolResults ?? []) as Array<{ toolCallId?: string; output?: unknown; result?: unknown }>) {
+      if (r.toolCallId) outs.set(r.toolCallId, r.output ?? r.result)
+    }
+    return calls.map((c) => {
+      let args = ""
+      try { args = JSON.stringify(c.input ?? {}).slice(0, 60) } catch { args = String(c.input ?? "").slice(0, 60) }
+      const raw = c.toolCallId ? outs.get(c.toolCallId) : undefined
+      const outText = typeof raw === "string" ? raw : (() => { try { return JSON.stringify(raw ?? "") } catch { return String(raw ?? "") } })()
+      return { name: String(c.toolName ?? "?"), args, output: outText.replace(/\s+/g, " ").trim().slice(0, 80) }
+    })
+  })
   return {
     text: result.text,
     steps: result.steps.length,
@@ -531,6 +550,7 @@ export async function runAgent(prompt: string, opts: AgentOptions = {}): Promise
     model: opts.model,
     usage: { in: u?.inputTokens ?? 0, out: u?.outputTokens ?? 0, cached: u?.cachedInputTokens ?? 0 },
     compactedStored,
+    ...(toolDetail.length ? { toolDetail } : {}),
   }
 }
 

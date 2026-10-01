@@ -742,8 +742,6 @@ export const delegateTool = tool({
     // 现在可配（默认仍 30，不改变现状），且用满时明确标注。
     const cap = loadConfig().subagentMaxSteps ?? 30
     try {
-      // T100：子代理过程摘要（工具×次数）——回显进结果落库，历史回看不再是黑盒
-      const subToolCount: Record<string, number> = {}
       const r = await runAgent(task, {
         system: p.system,
         tools,
@@ -752,16 +750,19 @@ export const delegateTool = tool({
         signal: store?.signal,
         sessionId: store?.sessionId,
         broker: store?.broker,
-        // T97：子代理每步进度顶到主对话状态行（带角色名与步数上限）。
-        // statusSink 来自主回合的 toolCtx——子代理自己的工具跑在自己嵌套的 ctx 里，不会串台
+        // T97/T100：每步进度两条通路——statusSink 单行文本（TUI 状态行）+ onSubStep
+        // 结构化事件（Web 分道）。T106 起回显明细从 steps 收，onStep 只管进度
         onStep: (info) => {
-          for (const t of info.tools) subToolCount[t] = (subToolCount[t] ?? 0) + 1
           store?.onSubStep?.({ persona, step: info.step, maxSteps: info.maxSteps, tools: info.tools })
           store?.statusSink?.(`[子代理 ${persona}] 第 ${info.step}/${info.maxSteps} 步${info.tools.length ? "：" + info.tools.join(",") : ""}`)
         },
       })
-      const procLine = Object.keys(subToolCount).length
-        ? `\n\n[子代理过程] ${Object.entries(subToolCount).map(([t, c]) => `${t}×${c}`).join("、")}（共 ${r.steps} 步）`
+      // T106（docs/70 方向 B）：回显带逐工具明细——「工具 · 参数摘要 → 输出摘要」，
+      // 历史回看不再是黑盒。截 20 行防巨量输出把回显顶爆（docs/50 同源教训）。
+      const detail = (r.toolDetail ?? []).slice(0, 20)
+      const procLine = detail.length
+        ? `\n\n[子代理过程] 共 ${r.steps} 步：\n` +
+          detail.map((d, i) => `${i + 1}. ${d.name} · ${d.args || "(无参数)"}${d.output ? ` → ${d.output}` : ""}`).join("\n")
         : ""
       return subagentResult(r.text + procLine, r.steps, cap)
     } catch (e) {

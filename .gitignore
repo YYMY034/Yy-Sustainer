@@ -36,3 +36,6 @@ desktop.ini
 # ---- 运行时卸载/打包临时目录 ----
 .agent-outputs/
 release-repair/
+
+# ---- 打包产物（同 release/）----
+release-new/

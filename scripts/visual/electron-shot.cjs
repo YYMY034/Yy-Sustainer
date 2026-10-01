@@ -45,6 +45,7 @@ const GEOMETRY_JS = `JSON.stringify((function(){
     composerVisible: cr ? (cr.height > 20 && cr.bottom <= window.innerHeight + 1 && cr.top < window.innerHeight) : false,
     hasMessages: !!msgs,
     settingsShown: document.querySelector('#setPage') ? document.querySelector('#setPage').classList.contains('show') : false,
+    isLight: document.documentElement.classList.contains('light'),
     pageErrors: (window.__pageErrors || []).slice(0, 10)
   }
 })())`
@@ -63,13 +64,24 @@ app.whenReady().then(async () => {
     await win.loadURL(BASE + "/")
     await new Promise((r) => setTimeout(r, 1800))
     for (const view of VIEWS) {
-      if (view !== "main") {
+      if (view === "settings") {
         // 从主视图导航过去（当前只支持 settings；未知视图按 settings 兜底处理会误导，直接记错）
         const clicked = await win.webContents.executeJavaScript(
           `(function(){ var b = document.querySelector('#settingsBtn'); if (b) b.click(); return !!b })()`,
         )
         if (!clicked) { results.push({ view, error: "找不到 #settingsBtn" }); continue }
         await new Promise((r) => setTimeout(r, 1000))
+      } else if (view === "main-dark") {
+        // T107：暗色主题视图——先回主视图（设置页开着时点返回），再点主题切换
+        const back = await win.webContents.executeJavaScript(
+          `(function(){ var s = document.querySelector('#setPage'); if (s && s.classList.contains('show')) { var b = document.querySelector('#setBack'); if (b) b.click(); return 'back' } return 'main' })()`,
+        )
+        if (back !== "main") await new Promise((r) => setTimeout(r, 800))
+        const toggled = await win.webContents.executeJavaScript(
+          `(function(){ var b = document.querySelector('#themeBtn'); if (b) b.click(); return !!b })()`,
+        )
+        if (!toggled) { results.push({ view, error: "找不到 #themeBtn" }); continue }
+        await new Promise((r) => setTimeout(r, 900))
       }
       const geoRaw = await win.webContents.executeJavaScript(GEOMETRY_JS)
       const img = await win.webContents.capturePage()

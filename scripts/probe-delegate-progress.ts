@@ -161,7 +161,7 @@ try {
   // T100：结构化 sub-step 事件——分道渲染的数据源，必须带 persona/step/maxSteps/tools
   check("sub-step 结构化事件到达（≥2 条）", subSteps.length >= 2, JSON.stringify(subSteps.slice(0, 3)))
   check("sub-step 字段完整（persona/步数/工具）", subSteps.every((s) => s.persona === "coder" && s.maxSteps === 5 && s.step > 0), JSON.stringify(subSteps[0] ?? null))
-  check("过程摘要落库（[子代理过程] 工具×次数）", finalText.includes("[子代理过程]") && finalText.includes("bash×2"), finalText.slice(0, 220))
+  check("过程明细落库（[子代理过程] 逐行 工具·参数→输出，T106 B 批）", finalText.includes("[子代理过程]") && /1\.\s*bash · /.test(finalText), finalText.slice(0, 300))
 } catch (e) {
   fail++
   console.log(`FAIL 运行出错 — ${(e as Error).stack ?? e}`)

@@ -28,7 +28,7 @@ check("loop StreamHandlers 有 onSubStep", loop.includes("onSubStep?: (info: { p
 check("loop 两处 ctx 都接了 onSubStep", (loop.match(/onSubStep: \(info\) => handlers\.onSubStep\?\.\(info\)/g) || []).length === 1 && (loop.match(/onSubStep: \(info: \{ persona/g) || []).length === 1)
 check("delegate 每步发结构化事件", tools.includes("store?.onSubStep?.({ persona, step: info.step, maxSteps: info.maxSteps, tools: info.tools })"))
 check("delegate 保留 T97 的状态行文本（TUI 同源）", tools.includes("[子代理 ${persona}] 第 ${info.step}/${info.maxSteps} 步"))
-check("过程摘要（工具×次数）追加进回显", tools.includes("[子代理过程]") && tools.includes("subToolCount"))
+check("过程明细（T106 B 批：逐行 工具·参数→输出）落进回显", tools.includes("[子代理过程]") && tools.includes("r.toolDetail ?? []") && tools.includes("d.output ? ` → ${d.output}`"))
 
 check("网关广播 sub-step 且带 persona", gw.includes('broadcast({ type: "sub-step", sessionId, persona: info.persona'))
 
