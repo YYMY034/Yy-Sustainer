@@ -184,6 +184,8 @@ export interface YyagentConfig {
   subagentMaxSteps?: number
   /** T111：会话归档天数——超过 N 天未活动的会话在网关启动时移入 sessions/archive/（不删除，0/未配=关闭） */
   sessionArchiveDays?: number
+  /** T119：全局并发上限——同时跑的 agent 回合数（交互+定时任务合计），超出排队等待。默认 2，0 = 不限 */
+  maxConcurrentRuns?: number
   /**
    * T117：主对话推理档位（reasoning_effort，如 low/medium/high）——**未配 = 服务端默认，不透传**。
    * 内部单一职责调用已经固定 low（internalProviderOptions）；这里只影响主对话：

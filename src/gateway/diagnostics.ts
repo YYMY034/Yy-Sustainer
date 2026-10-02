@@ -8,7 +8,7 @@
  * 红线：**任何密钥/凭据/用户内容不出现在输出里**——apiKey/authToken 打码，
  * providers/会话只出元数据（名字、数量、时间），不出消息正文、不出记忆内容。
  */
-import { existsSync, readFileSync, statSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { appRoot, loadConfig } from "../agent/config.js"
@@ -61,6 +61,31 @@ export function buildDiagnostics(opts: DiagOpts): Record<string, unknown> {
     }
   } catch { /* 读不了就报 absent */ }
 
+  // T122：记忆统计——条目数/体积/最后修改（治理视图的数据源；内容不出现在诊断里）
+  const memoryLayer = (dir: string): { topics: number; bytes: number; lastModified: number | null } => {
+    const tDir = join(dir, "topics")
+    if (!existsSync(tDir)) return { topics: 0, bytes: 0, lastModified: null }
+    let topics = 0
+    let bytes = 0
+    let last = 0
+    for (const f of readdirSync(tDir)) {
+      if (!f.endsWith(".md")) continue
+      topics++
+      const st = statSync(join(tDir, f))
+      bytes += st.size
+      last = Math.max(last, st.mtimeMs)
+    }
+    return { topics, bytes, lastModified: last || null }
+  }
+  const memoryRoot = join(homedir(), ".yyagent", "memory")
+  const memory: Record<string, unknown> = { user: memoryLayer(memoryRoot) }
+  const projectsDir = join(memoryRoot, "projects")
+  if (existsSync(projectsDir)) {
+    const projects: Record<string, unknown> = {}
+    for (const slug of readdirSync(projectsDir)) projects[slug] = memoryLayer(join(projectsDir, slug))
+    memory.projects = projects
+  }
+
   return {
     generatedAt: new Date().toISOString(),
     version: pkgVersion(),
@@ -88,5 +113,6 @@ export function buildDiagnostics(opts: DiagOpts): Record<string, unknown> {
     tasks: tasks.map((t) => ({ name: t.name, cron: t.cron, enabled: t.enabled !== false, lastOk: (t as { last?: { ok?: boolean } }).last?.ok ?? null })),
     recentErrors,
     usage,
+    memory,
   }
 }

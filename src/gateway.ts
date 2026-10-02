@@ -47,6 +47,7 @@ import { resolveMcpLoading } from "./mcp/intent.js"
 import { describeFailure, retryBudget, isContextOverflow, contextOverflowHint } from "./agent/errors.js"
 import { setSessionPermission, deleteSessionPermission, getSessionPermission, onBgExit, listBgSnapshot, bgLogTailById } from "./agent/tools.js"
 import { resolvePowerShell } from "./agent/ps.js"
+import { RunGate } from "./util/runGate.js"
 import { buildDiagnostics } from "./gateway/diagnostics.js"
 import { runBackupNow, listBackups, startBackupSchedule } from "./agent/backup.js"
 import { allowlistKeyFor } from "./agent/permissions.js"
@@ -63,6 +64,7 @@ import {
   persist,
   deleteSession,
   toCoreMessages,
+  stripThinkingForModel,
   truncateFrom,
   repairIndex,
   archiveStaleSessions,
@@ -182,6 +184,21 @@ function broadcast(msg: Record<string, unknown>): void {
   for (const c of wsClients) {
     if (c.readyState === WebSocket.OPEN) c.send(s)
   }
+}
+
+// T119：全局并发闸——上限 config.maxConcurrentRuns（默认 2，0 = 不限）。
+// runTurn 与 runDaemonTask 都从这里过：定时任务同点触发 + 用户对话不再叠成 N 路并发。
+const runGate = new RunGate(2)
+async function acquireRunSlot(sessionId: string): Promise<void> {
+  const max = loadConfig().maxConcurrentRuns ?? 2
+  if (runGate.capacity !== max) runGate.setMax(max)
+  if (!runGate.hasSlot) {
+    broadcast({ type: "notice", sessionId, text: `全局并发已满（${runGate.running}/${max}），排队中…` })
+  }
+  await runGate.acquire()
+}
+function releaseRunSlot(): void {
+  runGate.release()
 }
 
 // T95：后台任务完成 → 事件广播。引擎在任务退出时回调这里（引擎侧不认识 WS），
@@ -313,6 +330,8 @@ async function runDaemonTask(t: DaemonTask): Promise<void> {
   broadcast({ type: "notice", text: `任务「${t.name}」开始运行` })
   const t0 = Date.now()
   try {
+    // T119：定时任务与交互会话共享全局并发闸（等位时间计入任务超时预算，公平）
+    await acquireRunSlot("")
     const { runAgent } = await import("./agent/loop.js")
     const agentConfig = loadConfig()
     const r = await runAgent(t.prompt, {
@@ -332,6 +351,7 @@ async function runDaemonTask(t: DaemonTask): Promise<void> {
     broadcast({ type: "notice", text: `❌ 任务「${t.name}」失败：${msg.slice(0, 60)}` })
   } finally {
     taskRunning.delete(t.name)
+    releaseRunSlot() // T119：归还全局并发位
     broadcast({ type: "tasks", tasks: taskListPayload() })
     // T103：不再 closeMcpTools——网关是长驻进程，这里的全关会把**用户对话正在使用**的
     // MCP 连接一起杀掉（定时任务收尾恰好撞上交互回合时，工具调用中途失败）。
@@ -379,6 +399,10 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
   sessionBusy.add(sessionId)
   broadcast({ type: "busy", busy: true, sessionId }) // F4：带 sessionId，侧栏给对应会话加转圈
   broadcast({ type: "status", sessionId, text: "思考中" })
+
+  // T119：全局并发闸——定时任务与交互会话共享 API 通道，无全局上限时多任务同点触发
+  // 会 N 路并发（限流雪崩 + 费用叠加）。等位期间明说排队，拿到位才开始真正跑。
+  await acquireRunSlot(sessionId)
 
   // D6 文件修改追踪：本轮 write/edit 的文件快照（撤销功能数据源）
   beginFileTracking(sessionId)
@@ -825,6 +849,7 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
     // R4 会话独立：只清理本会话的状态，其他会话照常跑
     sessionBusy.delete(sessionId)
     sessionAborts.delete(sessionId)
+    releaseRunSlot() // T119：归还全局并发位（等待者按序唤醒）
     broadcast({ type: "busy", busy: false, sessionId }) // F4：带 sessionId，前端收掉对应会话的转圈
     broadcast({ type: "status", sessionId, text: "" })
     // 监工模式（config.watch，与 TUI 一致）：主任务完成后自动调辅助对话检查，    // 辅助发现的遗漏/新需求经 SEND 协议自动回主对话队列执行
@@ -1594,7 +1619,36 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   // （config 是全局的，为一个浏览任务给所有会话常开 35 个工具正是要消除的浪费）。
   // **排在通用 /api/sessions/{id} 之前**——按 checkpoint 路由的教训，字面/带后缀的
   // 路由一律先判，别去考验通用正则的锚。
-  let mt = p.match(/^\/api\/sessions\/([\w-]+)\/mcp$/)
+  // T121：会话导出 Markdown——给人类看的分享格式（标题/模型/消息正文，剥思考块，附步骤数）。
+  // 必须排在通用 /api/sessions/{id} 之前（同 checkpoint 路由的教训）；
+  // 用正则匹配而非 startsWith/endsWith——probe-routes 只认标准形状（本次 --check 实测）
+  let mt = p.match(/^\/api\/sessions\/([\w-]+)\/export$/)
+  if (mt && m === "GET") {
+    const id = mt[1]
+    const f = loadSession(id)
+    if (!f) return json(res, 404, { error: "会话不存在" })
+    const lines: string[] = [
+      `# ${f.meta.title || "会话"}`,
+      "",
+      `- 时间：${new Date(f.meta.createdAt).toLocaleString("zh-CN")} ~ ${new Date(f.meta.updatedAt).toLocaleString("zh-CN")}`,
+      f.meta.model ? `- 模型：${f.meta.model}` : "",
+      "",
+      "---",
+      "",
+    ]
+    for (const m2 of f.messages) {
+      if (m2.role === "system") continue
+      const who = m2.role === "user" ? "你" : "Yy Sustainer"
+      const ts = new Date(m2.ts).toLocaleString("zh-CN")
+      lines.push(`**${who}** · ${ts}`, "", stripThinkingForModel(m2.content).trim(), "")
+      if (m2.role === "assistant" && m2.steps?.length) lines.push(`> 经 ${m2.steps.length} 步工具调用`, "")
+    }
+    const body = lines.join("\n")
+    res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": `attachment; filename="session-${id}.md"` })
+    res.end(body)
+    return
+  }
+  mt = p.match(/^\/api\/sessions\/([\w-]+)\/mcp$/)
   if (mt && m === "GET") {
     const sid = mt[1]
     const f = loadSession(sid)
@@ -2034,6 +2088,22 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     }
     saveConfig(cfg)
     return json(res, 200, { ok: true, notify: cfg.notify })
+  }
+  // T120：通知链路测试——本地 toast + webhook 各发一条测试消息，返回各链路结果（配置后第一件事就是验证它）
+  if (m === "POST" && p === "/api/notify/test") {
+    const n = loadConfig().notify
+    toast("Yy Sustainer · 测试通知", "如果你看到这条弹窗，本地通知链路正常。")
+    let webhook: string | null = null
+    const url = String(n?.url ?? "").trim()
+    if (url) {
+      try {
+        const r = await fetch(url, { method: "POST", body: "Yy Sustainer 测试通知：webhook 链路正常。" })
+        webhook = r.ok ? "ok" : `HTTP ${r.status}`
+      } catch (e) {
+        webhook = (e as Error).message.slice(0, 100)
+      }
+    }
+    return json(res, 200, { ok: true, toast: true, webhook })
   }
   // T88 沙箱执行配置：GET 返回 Docker 可用性 + 当前配置；POST 写 enabled/image（saveConfig 即时生效）
   if (m === "GET" && p === "/api/sandbox") {
