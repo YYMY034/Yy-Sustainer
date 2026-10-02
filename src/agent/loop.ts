@@ -304,6 +304,8 @@ async function runConverge(
     () =>
       streamText({
         model: prep.model,
+        // T117：收敛续跑段与主轮同源（providerOptions 在 prep 里带上）
+        ...(prep.providerOptions ? { providerOptions: prep.providerOptions } : {}),
         system: prep.system,
         tools: prep.tools,
         messages,
@@ -495,7 +497,12 @@ async function prepare(
     messages,
     tools,
     // T115：内部单一职责调用（compactBase：拆分器等）→ reasoning 降 low 档；主对话不设限
-    ...(opts.compactBase ? { providerOptions: internalProviderOptions(providerName) } : {}),
+    // T117：主对话可选配置档位（config.reasoningEffort，未配 = 服务端默认）
+    ...(opts.compactBase
+      ? { providerOptions: internalProviderOptions(providerName) }
+      : config.reasoningEffort
+        ? { providerOptions: { [providerName]: { reasoningEffort: config.reasoningEffort } } }
+        : {}),
     stopWhen: [
       stepCountIs(opts.maxSteps ?? config.maxSteps ?? 50),
       // T85：长任务模式按会话覆盖收敛阈值（opts 优先，默认 3 分钟）

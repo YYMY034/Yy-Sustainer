@@ -27,9 +27,10 @@ check("共享助手存在且 reasoningEffort=low", cfg.includes("export function
 check("压缩调用接线", /generateText\(\{[\s\S]{0,300}providerOptions: internalProviderOptions\(providerName\)/.test(loop) || loop.includes("providerOptions: internalProviderOptions(providerName),"))
 check("钩子判定接线", judge.includes("providerOptions: internalProviderOptions(providerName)"))
 check("识图转述接线", vision.includes("providerOptions: internalProviderOptions(providerName)"))
-check("compactBase agent 调用接线（拆分器等）", loop.includes("...(opts.compactBase ? { providerOptions: internalProviderOptions(providerName) } : {})"))
-check("反向：主对话流式路径不设推理档位", /streamText\(\{[\s\S]{0,400}?providerOptions/.test(loop) === false)
-check("反向：runAgent 非内部路径不设档位", (loop.match(/providerOptions/g) || []).length === 3) // prepare 返回 + 压缩 + import 处注释外的三处使用
+check("compactBase agent 调用接线（拆分器等）", loop.includes("? { providerOptions: internalProviderOptions(providerName) }"))
+check("主对话可选档位以 config.reasoningEffort 为前提（未配不透传，T117）", loop.includes("? { providerOptions: { [providerName]: { reasoningEffort: config.reasoningEffort } } }"))
+check("收敛续跑段与主轮同源（providerOptions 随 prep 传递）", loop.includes("...(prep.providerOptions ? { providerOptions: prep.providerOptions } : {})"))
+check("providerOptions 字面量出现次数（压缩 + 接口 + 收敛两处 + 主对话两分支 + 钩子无关）", (loop.match(/providerOptions/g) || []).length === 7)
 
 console.log(`\n合计：${pass} 通过 / ${fail} 失败`)
 process.exit(fail ? 1 : 0)
