@@ -20,7 +20,7 @@ import { sceneTools } from "./sceneTools.js"
 import { BG_LOG_KEEP, BG_LOG_MAX_AGE_MS, bgLogPath, getBgTask, listBgTasks, nextBgId, saveBgTask, sweepBgRecords } from "./bgStore.js"
 import { taskTools } from "./tasks.js"
 import { trackFileChange } from "./fileTrack.js"
-import { psCommand, runPowerShell, truncate } from "./ps.js"
+import { resolvePowerShell, psCommand, runPowerShell, truncate } from "./ps.js"
 import { makeComputerTool } from "./computer.js"
 // T92：后台任务日志（~/.yyagent/bg/<id>.log）按数量/年龄清理
 import { sweepOldFiles } from "../util/logfile.js"
@@ -147,7 +147,11 @@ function startBackground(command: string, cwd: string): string {
     sweepBgRecords() // B1：日志没了，对应的元数据记录一并清
   }
   const logFile = join(logDir, `${id}.log`)
-  const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", psCommand(command)], {
+  // T116：cwd 不存在 → spawn 报指向 exe 的误导性 ENOENT（见 ps.ts 同款护栏）
+  if (!existsSync(cwd)) {
+    return `[后台任务启动失败：工作目录不存在 ${cwd}]`
+  }
+  const child = spawn(resolvePowerShell(), ["-NoProfile", "-NonInteractive", "-Command", psCommand(command)], {
     cwd,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
@@ -160,7 +164,9 @@ function startBackground(command: string, cwd: string): string {
   bgSession.set(id, toolCtx.getStore()?.sessionId)
   // B1：元数据落盘——进程内 Map 重启即空，而日志还在，那时模型「看得到路径拿不到上下文」
   saveBgTask({ id, pid: entry.pid, command, logFile, cwd, startedAt: entry.startedAt })
-  child.on("exit", (code) => {
+  // T116：exit 与 error 两路共用同一收尾——spawn 的 error 事件（如 ENOENT）没人接会
+  // **炸掉整个网关进程**（eval-nightly 首跑实测：一次 spawn 失败 = 全引擎崩）。
+  const finalize = (code: number | null): void => {
     entry.done = true
     entry.exitCode = code
     stream.end()
@@ -177,6 +183,13 @@ function startBackground(command: string, cwd: string): string {
       bgWaiters.delete(id)
       for (const w of ws) w()
     }
+  }
+  child.on("exit", (code) => finalize(code))
+  child.on("error", (e) => {
+    // spawn 失败（ENOENT 等）：进程从未存在，不会有 exit 事件——记日志、按失败终态收尾，
+    // 绝不让 error 冒泡成 uncaughtException 把网关带走
+    try { stream.write(`[启动失败: ${e.message}]\n`) } catch { /* 日志写不进就算了 */ }
+    finalize(null)
   })
   return id
 }

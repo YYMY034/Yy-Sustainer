@@ -6,6 +6,7 @@ import cron from "node-cron"
 import { runAgent } from "./agent/loop.js"
 import { loadConfig as loadAgentConfig } from "./agent/config.js"
 import { loadDaemonTasks, type DaemonTask as Task } from "./agent/taskstore.js"
+import { resolvePowerShell } from "./agent/ps.js"
 // T92：history.jsonl 走带轮转的写入（原来只增不减）
 import { appendLogLine } from "./util/logfile.js"
 
@@ -15,10 +16,13 @@ const LOGS = join(PKG_ROOT, "logs")
 function notify(title: string, message: string): void {
   const ps = join(PKG_ROOT, "scripts", "toast.ps1")
   try {
-    spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps, "-Title", title, "-Message", message], {
+    spawn(resolvePowerShell(), ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps, "-Title", title, "-Message", message], {
       windowsHide: true,
-      stdio: "ignore",
-    }).unref()
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+      // T116：spawn 的 ENOENT 是异步 error 事件，try/catch 挡不住——必须有监听者
+      .on("error", () => { /* 通知失败不影响任务 */ })
+      .unref()
   } catch {
     /* 通知失败不影响任务 */
   }

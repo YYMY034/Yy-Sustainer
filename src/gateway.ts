@@ -46,6 +46,7 @@ import { runAgentStream, compactNow, type AgentResult } from "./agent/loop.js"
 import { resolveMcpLoading } from "./mcp/intent.js"
 import { describeFailure, retryBudget, isContextOverflow, contextOverflowHint } from "./agent/errors.js"
 import { setSessionPermission, deleteSessionPermission, getSessionPermission, onBgExit, listBgSnapshot, bgLogTailById } from "./agent/tools.js"
+import { resolvePowerShell } from "./agent/ps.js"
 import { buildDiagnostics } from "./gateway/diagnostics.js"
 import { runBackupNow, listBackups, startBackupSchedule } from "./agent/backup.js"
 import { allowlistKeyFor } from "./agent/permissions.js"
@@ -284,10 +285,13 @@ function toast(title: string, message: string): void {
   try {
     const { spawn } = childProcess
     const ps = path.join(__dirname, "..", "scripts", "toast.ps1")
-    spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps, "-Title", title, "-Message", message], {
+    spawn(resolvePowerShell(), ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps, "-Title", title, "-Message", message], {
       windowsHide: true,
       stdio: "ignore",
-    }).unref()
+    })
+      // T116：spawn 的 ENOENT 是**异步** error 事件，try/catch 挡不住（eval-nightly 首跑实测炸过网关）
+      .on("error", () => { /* 通知失败不影响任务 */ })
+      .unref()
   } catch { /* 通知失败不影响任务 */ }
 }
 // T85 完成通知：本地 toast（默认开）+ 可选 webhook 推送（ntfy/Server酱——POST 正文即文本）

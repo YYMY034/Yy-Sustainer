@@ -1,6 +1,6 @@
 import { tool } from "ai"
 import { z } from "zod"
-import { readFileSync } from "node:fs"
+import { readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { listSessions } from "../session/store.js"
@@ -51,6 +51,46 @@ function readSession(id: string): { meta: Meta; messages: Msg[] } | null {
   }
 }
 
+/**
+ * T116：会话内容 LRU 缓存。conversation_search 每次对**全部**会话文件做读盘+解析，
+ * 会话攒多后每次检索都是秒级磁盘扫描；而检索的扫描顺序是新→旧，热点高度集中在前几十个。
+ * 失效靠 mtime：persist 走 tmp+rename 原子写，mtime 必变；文件被删则 statSync 抛错走兜底。
+ * 上限 20 条、单文件 >2MB 不缓存（防大历史把内存顶爆），LRU 淘汰最旧。
+ */
+const sessCache = new Map<string, { mtimeMs: number; data: { meta: Meta; messages: Msg[] } }>()
+const SESS_CACHE_MAX = 20
+const SESS_CACHE_MAX_BYTES = 2 * 1024 * 1024
+
+function readSessionCached(id: string): { meta: Meta; messages: Msg[] } | null {
+  const file = join(ROOT, `${id}.json`)
+  try {
+    const st = statSync(file)
+    const hit = sessCache.get(id)
+    if (hit && hit.mtimeMs === st.mtimeMs) {
+      sessCache.delete(id)
+      sessCache.set(id, hit) // LRU 触碰
+      return hit.data
+    }
+    const data = readSessionCached(id)
+    if (!data) {
+      sessCache.delete(id)
+      return null
+    }
+    if (st.size <= SESS_CACHE_MAX_BYTES) {
+      sessCache.set(id, { mtimeMs: st.mtimeMs, data })
+      if (sessCache.size > SESS_CACHE_MAX) {
+        const oldest = sessCache.keys().next().value
+        if (oldest) sessCache.delete(oldest)
+      }
+    }
+    return data
+  } catch {
+    // 文件没了/读不了：缓存里的也作废
+    sessCache.delete(id)
+    return null
+  }
+}
+
 function oneLine(s: unknown): string {
   return String(s ?? "").replace(/\s+/g, " ").trim()
 }
@@ -76,7 +116,7 @@ export function pastChatTools(): Record<string, unknown> {
       let examined = 0
       for (const m of metas) {
         if (hits.length >= max) break
-        const sess = readSession(m.id)
+        const sess = readSessionCached(m.id)
         if (!sess) continue
         examined++
         for (let i = sess.messages.length - 1; i >= 0; i--) {
@@ -123,7 +163,7 @@ export function pastChatTools(): Record<string, unknown> {
       offset: z.number().optional().describe("起始消息序号，默认 0"),
     }),
     async execute({ sessionId, offset }) {
-      const sess = readSession(sessionId)
+      const sess = readSessionCached(sessionId)
       if (!sess) return `会话不存在或不可读: ${sessionId}`
       const from = Math.max(offset ?? 0, 0)
       const slice = sess.messages.slice(from, from + 30)
