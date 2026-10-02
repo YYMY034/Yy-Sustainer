@@ -1407,6 +1407,14 @@
         </div>
         <div id="alList" class="al-list"></div>
       </div>
+      <div class="acard" id="healthCard">
+        <h3>运行健康</h3>
+        <div class="set-row" style="border-bottom:none;">
+          <div class="sl">最近失败任务<div class="sd">定时任务与执行的失败记录（最多 20 条，取自诊断数据）</div></div>
+          <button class="abtn" id="healthRefresh">刷新</button>
+        </div>
+        <div id="healthList"><div class="tk-empty">（暂无数据）</div></div>
+      </div>
       <div class="acard" id="secModel">
         <h3>模型</h3>
         <div class="set-row">
@@ -3469,6 +3477,7 @@ async function refreshState() {
   if (cur?.ctxPct != null) renderCtx(cur.ctxPct)
   renderTodoBar(st.todo ?? [], busy())
   if ($("autoPage")?.classList.contains("show")) refreshBgPanel() // T99：自动化页可见时顺带刷新后台任务面板
+  if ($("setPage")?.classList.contains("show")) refreshHealthPanel() // T118：设置页可见时刷新运行健康
   monitorStatus = streamingOn ? streamStatusText : ($("status").textContent ?? "") // T57：流式中监工取输出区状态
   renderMonitor()
   // P0-5：流式进行中不全量重绘（会冲掉正在追加的 streamBody），只同步按钮
@@ -4332,6 +4341,29 @@ $("afSubmit").onclick = async () => {
     resetAutoForm(); loadTasks()
   } catch (e) { $("afErr").textContent = `请求失败：${e.message}` }
 }
+// ---------- T118：运行健康（最近失败任务聚合，数据源 /api/diagnostics） ----------
+let healthCache = []
+async function refreshHealthPanel() {
+  try {
+    const d = await (await fetch("/api/diagnostics")).json()
+    healthCache = d.recentErrors ?? []
+    renderHealthPanel()
+  } catch { /* 网关没起就不刷 */ }
+}
+function renderHealthPanel() {
+  const box = $("healthList")
+  if (!box) return
+  if (!healthCache.length) { box.innerHTML = `<div class="tk-empty">近期没有失败记录 ✓</div>`; return }
+  box.innerHTML = healthCache.map((e) => `<div class="tk fail">
+      <span class="tdot"></span>
+      <div class="tmain">
+        <div class="tn"><span>${esc(String(e.task ?? "?"))}</span><span class="tcron">${esc(String(e.ts ?? "").slice(0, 16).replace("T", " "))}</span></div>
+        <div class="tlast bad">${esc(String(e.error ?? "").slice(0, 140))}</div>
+      </div>
+    </div>`).join("")
+}
+$("healthRefresh").onclick = () => refreshHealthPanel()
+
 // ---------- T99：后台任务面板（/api/bg + /api/bg/log） ----------
 let bgCache = []
 async function refreshBgPanel() {

@@ -33,6 +33,8 @@ check("诊断路由接上且传 logsDir", gw.includes('p === "/api/diagnostics"'
 check("诊断红线：secrets 字段标注 redacted", diag.includes('secrets: "redacted"'))
 check("诊断红线：反向——模块里不得出现 apiKey/authToken 的取值出口", !/apiKey[^\n]*:/.test(diag) && !diag.includes("authToken"))
 check("设置页有诊断下载按钮与处理器", web.includes('id="diagBtn"') && web.includes('$("diagBtn").onclick'))
+check("T118 运行健康卡：容器/刷新按钮/渲染函数", web.includes('id="healthCard"') && web.includes('id="healthRefresh"') && web.includes("function renderHealthPanel()"))
+check("T118 刷新挂在 refreshState（仅设置页可见时）", web.includes('if ($("setPage")?.classList.contains("show")) refreshHealthPanel()'))
 
 // T111
 check("config 有 sessionArchiveDays 字段", cfg.includes("sessionArchiveDays?: number"))
