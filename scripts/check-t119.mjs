@@ -40,7 +40,7 @@ check("设置页有测试按钮（先保存再测）", web.includes('id="notifyT
 check("会话导出路由（mt 正则形状，probe-routes 可识别）", /let mt = p\.match\(\^\\\/api\\\/sessions\\\/\(\[\\w-\]\+\)\\\/export\$\//.test(gw) || gw.includes("p.match(/^\\/api\\/sessions\\/([\\w-]+)\\/export$/)"))
 check("导出剥思考块（stripThinkingForModel）", gw.includes("stripThinkingForModel(m2.content)"))
 check("导出附步骤数", gw.includes("经 ${m2.steps.length} 步工具调用"))
-check("顶栏导出按钮 + 处理器", web.includes('id="exportBtn"') && web.includes('$("exportBtn").onclick') && web.includes("/api/sessions/${activeId}/export"))
+check("会话行悬停导出（与删除同款样式 + 每行独立 id）", web.includes('class="exp" title="导出为 Markdown"') && web.includes('expBtn.onclick') && web.includes("/api/sessions/${el.dataset.id}/export"))
 
 // T122
 check("诊断含记忆统计（user + projects 两层）", diag.includes("memoryLayer") && diag.includes("memory.projects"))
