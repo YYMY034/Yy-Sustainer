@@ -35,6 +35,11 @@ async function runOnce(task: Task): Promise<void> {
     console.log(`[${new Date().toISOString()}] SKIP ${task.name} (上一轮仍在运行)`)
     return
   }
+  // T126：任务名做字符集防御——tasks.json 允许手编，坏名字（如带 ../）会拼进日志目录
+  if (!/^[\w\u4e00-\u9fff-][\w\u4e00-\u9fff -]{0,63}$/.test(task.name)) {
+    console.error(`[${new Date().toISOString()}] SKIP ${task.name} (任务名含非法字符，拒绝执行)`)
+    return
+  }
   running.add(task.name)
   const t0 = Date.now()
   const logDir = join(LOGS, task.name)
@@ -114,6 +119,8 @@ function cmdStart(): void {
   if (scheduled === 0) {
     console.log("没有启用的任务，守护进程待机中（编辑 yyagentd.config.json 后重启生效）")
   }
+  process.on("uncaughtException", (e) => console.error("[uncaughtException]", e?.stack ?? e))
+  process.on("unhandledRejection", (e) => console.error("[unhandledRejection]", e))
   console.log("yyagentd running. Ctrl+C to stop.")
   void gatewayActive().then((up) => {
     if (up) console.log("检测到网关正在运行：定时任务由网关调度，本进程仅在网关离线时接管（防双跑）")

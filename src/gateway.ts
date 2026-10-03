@@ -179,6 +179,18 @@ let queueSeq = 0 // 排队条目自增 id（前端「立即发送/编辑」按 i
 const sessionsModelOverride = new Map<string, string>() // 会话级模型（对齐 TUI：会话 model 优先）
 const wsClients = new Set<WebSocket>()
 
+// T126：最后防线——长驻网关进程不因任何遗漏的异步错误而死亡（eval-nightly 首跑的 spawn 崩溃教训）。
+// 记录到引擎日志后继续服务；这不是掩盖 bug（bug 照样在日志里），是把「全引擎死亡」降级为「单请求失败」。
+let lastFatalLog = 0
+process.on("uncaughtException", (e) => {
+  const now = Date.now()
+  if (now - lastFatalLog > 1000) { lastFatalLog = now; console.error("[uncaughtException]", e?.stack ?? e) }
+})
+process.on("unhandledRejection", (e) => {
+  const now = Date.now()
+  if (now - lastFatalLog > 1000) { lastFatalLog = now; console.error("[unhandledRejection]", e instanceof Error ? e.stack ?? e.message : e) }
+})
+
 function broadcast(msg: Record<string, unknown>): void {
   const s = JSON.stringify(msg)
   for (const c of wsClients) {
@@ -1855,15 +1867,20 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const cronExpr = String(body.cron ?? "").trim()
     const prompt = String(body.prompt ?? "").trim()
     if (!name || !prompt) return json(res, 400, { error: "name / prompt 必填" })
+    // T126：任务名做字符集校验——名字会被拼进日志目录（main.ts 的 logs/<name>/），
+    // 裸 trim 让 `..\..\evil` 这类名字可以写出 logs 之外
+    if (!/^[\w\u4e00-\u9fff-][\w\u4e00-\u9fff -]{0,63}$/.test(name)) return json(res, 400, { error: "任务名只能用中英文/数字/_/空格/-（首字符非空格），长度 1-64" })
     if (!cronLib.validate(cronExpr)) return json(res, 400, { error: `无效的 cron 表达式: ${cronExpr}` })
     const tasks = loadDaemonTasks()
     if (tasks.some((t) => t.name === name)) return json(res, 409, { error: `任务名已存在: ${name}` })
     const t: DaemonTask = {
       name, cron: cronExpr, prompt,
-      cwd: body.cwd ? String(body.cwd) : undefined,
+      // T126：创建时就拦下不存在的 cwd（坏 cwd 到跑的时候才报误导性 spawn ENOENT）
+      cwd: body.cwd ? (String(body.cwd).trim() || undefined) : undefined,
       timeoutMs: Number(body.timeoutMs) > 0 ? Number(body.timeoutMs) : undefined,
       enabled: true,
     }
+    if (t.cwd && !fs.existsSync(t.cwd)) return json(res, 400, { error: `工作目录不存在: ${t.cwd}` })
     tasks.push(t)
     saveDaemonTasks(tasks)
     scheduleTask(t)
@@ -1882,7 +1899,13 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       t.cron = cronExpr
     }
     if (body.prompt != null) t.prompt = String(body.prompt).trim() || t.prompt
-    if (body.cwd != null) t.cwd = String(body.cwd).trim() || undefined
+    // T126：cwd 也做存在性校验——坏 cwd 到跑的时候才报 spawn ENOENT（指向 exe 的误导性报错），
+    // 不如在创建/更新时就拦下
+    if (body.cwd != null) {
+      const cwdCandidate = String(body.cwd).trim()
+      if (cwdCandidate && !fs.existsSync(cwdCandidate)) return json(res, 400, { error: `工作目录不存在: ${cwdCandidate}` })
+      t.cwd = cwdCandidate || undefined
+    }
     if (body.timeoutMs != null && Number(body.timeoutMs) > 0) t.timeoutMs = Number(body.timeoutMs)
     saveDaemonTasks(tasks)
     scheduleTask(t)
