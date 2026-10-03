@@ -65,7 +65,9 @@ export interface ToolContext {
   statusSink?: (text: string) => void
   /** T100：子代理步进的结构化事件（区别于 statusSink 的单行文本——
    *  多个子代理并行时文本会互相覆盖，分道渲染要按 persona 各自一行） */
-  onSubStep?: (info: { persona: string; step: number; maxSteps: number; tools: string[] }) => void
+  onSubStep?: (info: { persona: string; path: string[]; step: number; maxSteps: number; tools: string[] }) => void
+  /** T124：委派路径——主代理 []，子代理 = 父路径 + 自己的角色名；递归深度按 path 长度限 2 层 */
+  path?: string[]
 }
 
 export const toolCtx = new AsyncLocalStorage<ToolContext>()
@@ -743,13 +745,20 @@ export const delegateTool = tool({
       const names = (await (await import("./personas.js")).listPersonas()).map((x) => x.name).join(", ")
       return `[失败] 未知角色: ${persona}（可用角色：${names}）`
     }
-    const base = makeTools({})
-    const tools = p.tools?.length
-      ? ({ ...Object.fromEntries(p.tools.map((t) => [t, base[t]]).filter(([, v]) => v)), ...memoryTools(), ...makeTodoTool() } as Record<string, Tool>)
-      : base
     // T93：子代理原来只拿到 cwd —— 主循环 abort 后它照跑、它的权限确认问不到人、
     // todo_write 还会落到全局 ~/.yyagent/todo.json 污染别的会话。四项上下文一起透传。
     const store = toolCtx.getStore()
+    // T124：递归编排——委派路径 = 父路径 + 自己的角色名，深度限 2 层（防无限递归烧钱）。
+    // 子代理的工具集允许再带 delegate（下一层派发），深度闸在入口拦截。
+    const parentPath = store?.path ?? []
+    const childPath = [...parentPath, persona]
+    if (childPath.length > 2) {
+      return `[子任务失败] 委派深度已达上限（2 层：${childPath.join(" › ")}）。请在当前层直接完成，或把任务拆成更小的独立部分。`
+    }
+    const base = makeTools({ allowDelegate: true })
+    const tools = p.tools?.length
+      ? ({ ...Object.fromEntries(p.tools.map((t) => [t, base[t]]).filter(([, v]) => v)), ...memoryTools(), ...makeTodoTool() } as Record<string, Tool>)
+      : base
     // T93 P3：步数上限原来硬编码 30，而主代理是 config.maxSteps ?? 50——
     // 子任务更容易被截断，且截断后**静默**返回：主代理分不清它是做不完还是做错了。
     // 现在可配（默认仍 30，不改变现状），且用满时明确标注。
@@ -763,11 +772,12 @@ export const delegateTool = tool({
         signal: store?.signal,
         sessionId: store?.sessionId,
         broker: store?.broker,
-        // T97/T100：每步进度两条通路——statusSink 单行文本（TUI 状态行）+ onSubStep
-        // 结构化事件（Web 分道）。T106 起回显明细从 steps 收，onStep 只管进度
+        delegatePath: childPath,
+        // T97/T100/T124：每步进度两条通路——statusSink 单行文本（TUI 状态行）+ onSubStep
+        // 结构化事件（Web 分道，带委派路径支持递归嵌套）。T106 起回显明细从 steps 收
         onStep: (info) => {
-          store?.onSubStep?.({ persona, step: info.step, maxSteps: info.maxSteps, tools: info.tools })
-          store?.statusSink?.(`[子代理 ${persona}] 第 ${info.step}/${info.maxSteps} 步${info.tools.length ? "：" + info.tools.join(",") : ""}`)
+          store?.onSubStep?.({ persona, path: childPath, step: info.step, maxSteps: info.maxSteps, tools: info.tools })
+          store?.statusSink?.(`[子代理 ${childPath.join(" › ")}] 第 ${info.step}/${info.maxSteps} 步${info.tools.length ? "：" + info.tools.join(",") : ""}`)
         },
       })
       // T106（docs/70 方向 B）：回显带逐工具明细——「工具 · 参数摘要 → 输出摘要」，

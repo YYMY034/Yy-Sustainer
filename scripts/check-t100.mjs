@@ -23,17 +23,17 @@ const check = (label, ok, extra = "") => {
   if (ok) { pass++; console.log(`ok   ${label}${extra ? " — " + extra : ""}`) } else { fail++; console.log(`FAIL ${label}${extra ? " — " + extra : ""}`) }
 }
 
-check("ToolContext 有 onSubStep", tools.includes("onSubStep?: (info: { persona: string; step: number; maxSteps: number; tools: string[] }) => void"))
-check("loop StreamHandlers 有 onSubStep", loop.includes("onSubStep?: (info: { persona: string; step: number; maxSteps: number; tools: string[] }) => void"))
+check("ToolContext 有 onSubStep（T124 起 path 进事件）", tools.includes("onSubStep?: (info: { persona: string; path: string[]; step: number; maxSteps: number; tools: string[] }) => void"))
+check("loop StreamHandlers 有 onSubStep（T124 起 path 进事件）", loop.includes("onSubStep?: (info: { persona: string; path: string[]; step: number; maxSteps: number; tools: string[] }) => void"))
 check("loop 两处 ctx 都接了 onSubStep", (loop.match(/onSubStep: \(info\) => handlers\.onSubStep\?\.\(info\)/g) || []).length === 1 && (loop.match(/onSubStep: \(info: \{ persona/g) || []).length === 1)
-check("delegate 每步发结构化事件", tools.includes("store?.onSubStep?.({ persona, step: info.step, maxSteps: info.maxSteps, tools: info.tools })"))
-check("delegate 保留 T97 的状态行文本（TUI 同源）", tools.includes("[子代理 ${persona}] 第 ${info.step}/${info.maxSteps} 步"))
+check("delegate 每步发结构化事件（path 随行）", tools.includes("store?.onSubStep?.({ persona, path: childPath, step: info.step, maxSteps: info.maxSteps, tools: info.tools })"))
+check("状态行文本带委派链（T124：父 › 子）", tools.includes('childPath.join(" › ")'))
 check("过程明细（T106 B 批：逐行 工具·参数→输出）落进回显", tools.includes("[子代理过程]") && tools.includes("r.toolDetail ?? []") && tools.includes("d.output ? ` → ${d.output}`"))
 
 check("网关广播 sub-step 且带 persona", gw.includes('broadcast({ type: "sub-step", sessionId, persona: info.persona'))
 
 check("web 有分道容器（streaming 模板内）", web.includes('<div id="subLanes"></div>'))
-check("web 处理 sub-step 事件按 persona 分行", /m\.type === "sub-step"[\s\S]{0,300}subLanes\.set\(m\.persona/.test(web))
+check("web 处理 sub-step 事件按 path 组键（T124 递归嵌套各行）", /m\.type === "sub-step"[\s\S]{0,400}subLanes\.set\(laneKey/.test(web))
 check("回合结束与会话切换都清分道", web.includes("subLanes.clear()") && (web.match(/subLanes\.clear\(\)/g) || []).length === 2)
 check("分道样式存在", web.includes(".sub-lane"))
 

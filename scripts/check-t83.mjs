@@ -58,7 +58,7 @@ ok('完成通知：≥30s 或长任务回合才提醒；出错也提醒',
   // T93 P2：超时不算「任务完成」，不该发完成通知（多一个 !timedOut 前置条件）
   /if \(!timedOut && \(durTurn >= 30_000 \|\| meta\.longTask\)\)/.test(gateway) && /notifyDone\("Yy Sustainer · 任务出错"/.test(gateway))
 ok('定时任务完成走 notifyDone（toast + webhook）', /notifyDone\(`Yy Sustainer · \$\{t\.name\}`/.test(gateway))
-ok('notify 配置字段与路由', /notify\?: \{ toast\?: boolean; url\?: string \}/.test(config) && gateway.includes('p === "/api/notify"'))
+ok('notify 配置字段与路由', /notify\?: \{ toast\?: boolean; url\?: string;[\s\S]{0,200}?onlyFailure\?: boolean \}/.test(config) && gateway.includes('p === "/api/notify"'))
 ok('web：composerBar 长任务按钮 + 换会话同步', html.includes('id="longTaskBtn"') && /syncLongTask\(\) \/\/ T85/.test(script))
 
 console.log('=== 语法与配平 ===')

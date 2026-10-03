@@ -312,8 +312,10 @@ function toast(title: string, message: string): void {
   } catch { /* 通知失败不影响任务 */ }
 }
 // T85 完成通知：本地 toast（默认开）+ 可选 webhook 推送（ntfy/Server酱——POST 正文即文本）
-function notifyDone(title: string, message: string): void {
+function notifyDone(title: string, message: string, failure = false): void {
   const n = loadConfig().notify
+  // T125：onlyFailure=true 时成功不推送（无人值守场景免打扰），失败必推
+  if (n?.onlyFailure && !failure) return
   if (n?.toast !== false) toast(title, message)
   if (n?.url) {
     try {
@@ -347,7 +349,7 @@ async function runDaemonTask(t: DaemonTask): Promise<void> {
   } catch (e) {
     const msg = (e as Error).message
     appendLogLine(path.join(LOGS_DIR, "history.jsonl"), JSON.stringify({ ts: new Date().toISOString(), task: t.name, ok: false, durationMs: Date.now() - t0, error: msg }) + "\n")
-    notifyDone(`Yy Sustainer · ${t.name} 失败`, msg.slice(0, 80))
+    notifyDone(`Yy Sustainer · ${t.name} 失败`, msg.slice(0, 80), true)
     broadcast({ type: "notice", text: `❌ 任务「${t.name}」失败：${msg.slice(0, 60)}` })
   } finally {
     taskRunning.delete(t.name)
@@ -624,9 +626,10 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
                 if (cpSteps >= CHECKPOINT_EVERY_STEPS && Date.now() - cpLastMs >= CHECKPOINT_MIN_GAP_MS) writeCp()
               }
             },
-            // T100：子代理分道——delegate 内部每步一条结构化事件（persona 维度），前端并行子代理各占一行
+            // T100/T124：子代理分道——delegate 内部每步一条结构化事件；path 支持递归嵌套
+            // （grandchild 的 path = [父角色, 子角色]），前端按 path.join(">") 分行
             onSubStep: (info) =>
-              broadcast({ type: "sub-step", sessionId, persona: info.persona, step: info.step, maxSteps: info.maxSteps, tools: info.tools }),
+              broadcast({ type: "sub-step", sessionId, persona: info.persona, path: info.path ?? [info.persona], step: info.step, maxSteps: info.maxSteps, tools: info.tools }),
           },
         )
         break
@@ -813,7 +816,7 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
       persist(meta, [...(r?.compactedStored ?? msgsAfterUser), errMsg])
       broadcast({ type: "message", sessionId, message: errMsg })
       broadcast({ type: "error", sessionId, message: err.message })
-      notifyDone("Yy Sustainer · 任务出错", `「${meta.title.slice(0, 24)}」：${err.message.slice(0, 100)}`) // T85
+      notifyDone("Yy Sustainer · 任务出错", `「${meta.title.slice(0, 24)}」：${err.message.slice(0, 100)}`, true) // T85
       takeFileEdits(sessionId) // 出错丢弃快照（abort 也走这里）
     } else {
       // T93 P3：熔断/超时/用户停止三种都要说清是哪一种——「已停止」会让人以为是自己点了停止

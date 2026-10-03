@@ -115,3 +115,34 @@ export function memoryTools(): Record<string, unknown> {
 
   return { memory_save: saveTool, memory_search: searchTool, memory_read: readTool }
 }
+
+/**
+ * T123：被动记忆索引摘要——把两层 MEMORY.md 索引交给 prepare() 注入系统提示。
+ *
+ * 为什么要有它：记忆是**拉模式**（模型想起来才去 memory_search），而拉模式的天花板是
+ * 「模型得知道有什么可搜」。索引常驻上下文后，跨会话的连续性从「碰运气」变成「看得见」。
+ *
+ * 约束：总量封顶（超出截断并提示用 memory_read __index__ 看全文）；项目层按目录枚举；
+ * 任何读取失败都静默降级为空串（记忆缺席不该弄坏主流程）。内部单一职责调用
+ * （compactBase）不注入——它们不看用户记忆。
+ */
+export function memoryIndexSummary(maxChars = 1600): string {
+  const parts: string[] = []
+  try {
+    const userIndex = join(ROOT, "MEMORY.md")
+    if (existsSync(userIndex)) parts.push(`[user 层]\n${readFileSync(userIndex, "utf8").trim()}`)
+    const pDir = join(ROOT, "projects")
+    if (existsSync(pDir)) {
+      for (const slug of readdirSync(pDir)) {
+        const f = join(pDir, slug, "MEMORY.md")
+        if (existsSync(f)) parts.push(`[project:${slug}]\n${readFileSync(f, "utf8").trim()}`)
+      }
+    }
+  } catch {
+    return ""
+  }
+  if (!parts.length) return ""
+  let s = parts.join("\n\n")
+  if (s.length > maxChars) s = `${s.slice(0, maxChars)}\n…（索引过长已截断；用 memory_read 的 __index__ 主题看完整索引）`
+  return s.trim()
+}

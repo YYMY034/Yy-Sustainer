@@ -1,6 +1,7 @@
 import { generateText, streamText, stepCountIs, type CoreMessage, type Tool, type ToolSet, type StopCondition } from "ai"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { loadConfig, resolveModel, internalProviderOptions } from "./config.js"
+import { memoryIndexSummary } from "./memory.js"
 import { composeSystem } from "./prompt.js"
 import { asDiagnosedError } from "./errors.js"
 import { makeTools, toolCtx } from "./tools.js"
@@ -30,6 +31,9 @@ export interface AgentOptions {
   model?: string
   signal?: AbortSignal
   history?: HistoryMessage[]
+  /** T124：委派路径（递归编排）——主代理为 undefined，子代理 = 父路径 + 自己的角色名。
+   *  用于 sub-step 事件分道与递归深度判定（ctx.path 长度 > 2 层即拒绝再委派）。 */
+  delegatePath?: string[]
   tools?: Record<string, Tool>
   system?: string
   /** T72/T73：opts.system 是「专用角色/任务指令」，经 composeSystem 追加在基础层之后（不替换）。
@@ -109,7 +113,7 @@ export type StreamHandlers = {
   onCompactedStored?: (stored: StoredLike[]) => void
   /** T100：子代理步进（delegate 内部的每一步）。与 onStatus 的单行文本不同，
    *  这里带 persona——前端按角色分道渲染，并行子代理各占一行不互相覆盖 */
-  onSubStep?: (info: { persona: string; step: number; maxSteps: number; tools: string[] }) => void
+  onSubStep?: (info: { persona: string; path: string[]; step: number; maxSteps: number; tools: string[] }) => void
 }
 
 const TOOL_CN: Record<string, string> = {
@@ -300,7 +304,7 @@ async function runConverge(
   let inReason = false
   let reasoningText = ""
   const result = toolCtx.run(
-    { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal, statusSink: (s: string) => handlers.onStatus?.(s), onSubStep: (info) => handlers.onSubStep?.(info) },
+    { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal, path: opts.delegatePath ?? [], statusSink: (s: string) => handlers.onStatus?.(s), onSubStep: (info) => handlers.onSubStep?.(info) },
     () =>
       streamText({
         model: prep.model,
@@ -410,12 +414,16 @@ async function prepare(
   // 专用角色指令走 composeSystem 的 role 槽：放在最后且前置作用域声明，严格输出格式不被基础层冲散。
   const { skillsPrompt } = await import("../skills/loader.js")
   const injection = opts.disableInjection ? "" : await loadInjection({ cwd: opts.cwd ?? process.cwd(), model: opts.model })
+  // T123：被动记忆注入——两层记忆索引常驻系统提示，模型「看得见有什么可搜」再主动 memory_read。
+  // 拉模式的天花板是「得知道有什么可搜」；索引封顶 1600 字符，内部单一职责调用（compactBase）不注入。
+  const memSection = opts.compactBase || opts.disableInjection ? "" : memoryIndexSummary()
+  const memSuffix = memSection ? `## 长期记忆索引（自动注入；需要细节时用 memory_read 读全文，不要凭索引编造内容）\n${memSection}` : ""
   // T91：compactBase 的内部调用连技能文档一起省掉——它做的是单次转换/判定，不会去走技能工作流
   const system = composeSystem({
     injection,
     skills: opts.compactBase ? undefined : skillsPrompt(),
     role: opts.system,
-    suffix: opts.systemSuffix,
+    suffix: [opts.systemSuffix, memSuffix].filter(Boolean).join("\n\n") || undefined,
     compactBase: opts.compactBase,
   })
   // T93：把上一轮真实输入量喂给压缩判定；返回的 compacted 标记供调用方决定是否把压缩结果落库
@@ -520,7 +528,7 @@ export async function runAgent(prompt: string, opts: AgentOptions = {}): Promise
   const t0 = Date.now()
   // compactedStored 是给调用方落库用的，不是 AI SDK 的选项——展开前先摘掉
   const { compactedStored, ...modelOpts } = prep
-  const ctx = { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal }
+  const ctx = { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal, path: opts.delegatePath ?? [] }
   let stepNo = 0
   const result = await toolCtx.run(ctx, () =>
     generateText({
@@ -598,7 +606,7 @@ export async function runAgentStream(
   const t0 = Date.now()
   // T93：compactedStored 不是 AI SDK 选项，展开前摘掉；它随 AgentResult 回传给调用方落库
   const { compactedStored, ...modelOpts } = prep
-  const ctx = { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal, statusSink: (s: string) => handlers.onStatus?.(s), onSubStep: (info: { persona: string; step: number; maxSteps: number; tools: string[] }) => handlers.onSubStep?.(info) }
+  const ctx = { cwd: opts.cwd ?? process.cwd(), broker: opts.broker, sessionId: opts.sessionId, signal: opts.signal, path: opts.delegatePath ?? [], statusSink: (s: string) => handlers.onStatus?.(s), onSubStep: (info: { persona: string; path: string[]; step: number; maxSteps: number; tools: string[] }) => handlers.onSubStep?.(info) }
   handlers.onStatus?.("思考中")
   let steps = 0
   // T91：已发起过的工具调用数。一旦 > 0，本次回合就可能已经产生副作用（写盘/执行命令/发请求），

@@ -3758,7 +3758,8 @@ function connect() {
     else if (m.type === "sub-step") {
       // T100：子代理分道事件——按 persona 各自一行，实时更新
       if (!m.sessionId || m.sessionId === activeId) {
-        subLanes.set(m.persona, { step: m.step, maxSteps: m.maxSteps, tools: m.tools ?? [] })
+        const laneKey = Array.isArray(m.path) && m.path.length ? m.path.join(">") : String(m.persona)
+        subLanes.set(laneKey, { label: Array.isArray(m.path) && m.path.length ? m.path.join(" › ") : String(m.persona), step: m.step, maxSteps: m.maxSteps, tools: m.tools ?? [] })
         if (streamStatusText) ensureStream()
         renderSubLanes()
       }
@@ -3787,8 +3788,8 @@ function renderSubLanes() {
   const box = $("subLanes")
   if (!box) return
   if (!subLanes.size) { box.innerHTML = ""; return }
-  box.innerHTML = [...subLanes.entries()].map(([p, l]) =>
-    `<div class="sub-lane"><span class="sl-p">${esc(p)}</span><span class="sl-s">第 ${l.step}/${l.maxSteps} 步${l.tools && l.tools.length ? " · " + esc(l.tools.join(",")) : ""}</span></div>`,
+  box.innerHTML = [...subLanes.entries()].map(([k, l]) =>
+    `<div class="sub-lane"><span class="sl-p">${esc(l.label || k)}</span><span class="sl-s">第 ${l.step}/${l.maxSteps} 步${l.tools && l.tools.length ? " · " + esc(l.tools.join(",")) : ""}</span></div>`,
   ).join("")
 }
 // T98：状态行节奏透明——当前状态从何时开始（≥3s 显示「· Ns」，用户能分辨「在干活」和「卡住了」）

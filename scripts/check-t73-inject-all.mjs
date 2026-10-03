@@ -29,7 +29,7 @@ ok(
 
 console.log("B. 四处调用点全部接入");
 // T91：调用点变成多行，且 skills 按 compactBase 决定是否注入（精简层不带技能文档）
-ok("B1 loop.ts prepare 用 composeSystem（role=opts.system）", /const system = composeSystem\(\{[\s\S]{0,200}?injection,[\s\S]{0,200}?role: opts\.system,[\s\S]{0,200}?suffix: opts\.systemSuffix,/.test(loop));
+ok("B1 loop.ts prepare 用 composeSystem（role=opts.system）", /const system = composeSystem\(\{[\s\S]{0,200}?injection,[\s\S]{0,200}?role: opts\.system,[\s\S]{0,300}?suffix: \[opts\.systemSuffix, memSuffix\]/.test(loop));
 ok("B2 loop.ts 已无 SYSTEM_PROMPT 直接引用（统一走 composeSystem）", !/import \{ SYSTEM_PROMPT \}/.test(loop));
 ok("B3 basePrompt 逃生口已移除（全路径无例外）", !loop.includes("basePrompt") && !gateway.includes("basePrompt"));
 // T91：四个内部调用点都显式带上 compactBase: true（它们是「不看用户对话、不碰工具、只做单一判定」的场景）。

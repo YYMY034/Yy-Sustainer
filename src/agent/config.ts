@@ -250,7 +250,7 @@ export interface YyagentConfig {
   /** T84 项目级命令白名单：key=归一化 cwd，value=允许的命令前缀（如 ["npm","git"]）——匹配则跳过确认 */
   allowlists?: Record<string, string[]>
   /** T85 完成通知：长任务/回合结束时本地 toast + 可选 webhook 推送（ntfy/Server酱，POST 正文即文本） */
-  notify?: { toast?: boolean; url?: string }
+  notify?: { toast?: boolean; url?: string; /** T125：只推送失败（无人值守免打扰），成功静默 */ onlyFailure?: boolean }
   /** 多项目拆分器用的快速模型（如 siliconflow/qwen3.8-flash）；缺省用主模型——慢模型会把 /api/chat 挂几分钟 */
   splitterModel?: string
   /** 多项目拆分器 LLM 调用超时毫秒数，默认 120000；超时视为拆分失败，回落原流程 */
