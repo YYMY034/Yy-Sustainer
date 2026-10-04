@@ -740,8 +740,8 @@
   #modelMenu .mi.active { color: var(--accent); }
   #modelMenu .mi .prov
   /* T129：推理档位行——悬停 .mi 展开，默认隐藏 */
-  #modelMenu .mre { display: none; align-items: center; gap: 4px; padding: 4px 0 2px; width: 100%; }
-  #modelMenu .mi:hover .mre { display: flex; }
+  #modelMenu .mre { display: none !important; align-items: center; gap: 4px; padding: 4px 0 2px; width: 100%; }
+  #modelMenu .mi:hover .mre { display: flex !important; }
   #modelMenu .mre-label { font-size: 10px; color: var(--dim); flex-shrink: 0; }
   #modelMenu .mre-btn { border: 1px solid var(--border); background: transparent; color: var(--dim); font-size: 10px; padding: 1px 6px; border-radius: 4px; cursor: pointer; }
   #modelMenu .mre-btn:hover { color: var(--text); border-color: var(--text); }
@@ -1197,6 +1197,11 @@
   </div>
 
   <div id="modelMenu"></div>
+  <div id="reasonPop" style="display:none; position:fixed; z-index:101; background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:10px 12px; box-shadow:0 4px 16px var(--shadow); min-width:200px;">
+    <div style="font-size:12px; font-weight:600; color:var(--text); margin-bottom:6px;" id="reasonPopName"></div>
+    <div style="display:flex; gap:6px; align-items:center;" id="reasonPopBtns"></div>
+    <div style="font-size:10px; color:var(--dim); margin-top:6px;">悬停停留自动浮出 · 点击即存</div>
+  </div>
   <div id="searchPop">
     <div id="searchBoxWrap">
       <div id="searchField">
@@ -2075,6 +2080,26 @@ let modelReasoning = {}
 async function fetchModelReasoning() {
   try { modelReasoning = (await (await fetch("/api/model/reasoning")).json())?.map ?? {} } catch { modelReasoning = {} }
 }
+function showReasonPop(el) {
+  const spec = el.dataset.spec
+  const name = el.dataset.title || spec
+  const pop = $("reasonPop")
+  pop.dataset.spec = spec
+  $("reasonPopName").textContent = name
+  const cur = modelReasoning[spec] || ""
+  $("reasonPopBtns").innerHTML = ["low","medium","high",""].map((e) =>
+      `<button data-effort="${e}" style="border:1px solid ${cur === e ? "var(--accent)" : "var(--border)"}; color:${cur === e ? "var(--accent)" : "var(--dim)"}; background:transparent; font-size:11px; padding:3px 10px; border-radius:6px; cursor:pointer;">${e || "默认"}</button>`
+    ).join("")
+  const r = el.getBoundingClientRect()
+  const popW = 220
+  let x = r.right + 8
+  if (x + popW > window.innerWidth) x = r.left - popW - 8
+  pop.style.left = x + "px"
+  pop.style.top = Math.max(8, r.top - 4) + "px"
+  pop.style.display = "block"
+}
+function hideReasonPop() { $("reasonPop").style.display = "none" }
+
 function renderModelMenu() {
   const list = filteredModels()
   const cur = pickerValue()
@@ -2090,7 +2115,7 @@ function renderModelMenu() {
     ? groups.map((g) =>
       `<div class="mg"><span class="dot"></span><span class="mname" title="${esc(g.provider)}">${esc(g.provider)}</span><span class="mc">${g.items.length}</span></div>` +
       g.items.map((m) =>
-        `<div class="mi ${m.spec === cur ? "active" : ""}" data-spec="${esc(m.spec)}" title="${esc(m.spec)}"><span>${esc(m.modelId || modelShort(m.spec))}</span>${modelReasoning[esc(m.spec)] ? `<span class="mre-badge" title="推理深度">${modelReasoning[esc(m.spec)]}</span>` : ""}${m.spec === cur ? "<span>✓</span>" : ""}<div class="mre"><span class="mre-label">推理</span>${["low","medium","high"].map((e) => `<button class="mre-btn ${modelReasoning[esc(m.spec)] === e ? "on" : ""}" data-spec="${esc(m.spec)}" data-effort="${e}">${e}</button>`).join("")}<button class="mre-btn ${!modelReasoning[esc(m.spec)] ? "on" : ""}" data-spec="${esc(m.spec)}" data-effort="">默认</button></div></div>`
+        `<div class="mi ${m.spec === cur ? "active" : ""}" data-spec="${esc(m.spec)}" data-title="${esc(m.modelId || modelShort(m.spec))}" title="${esc(m.spec)}"><span>${esc(m.modelId || modelShort(m.spec))}</span>${modelReasoning[m.spec] ? `<span class="mre-badge" title="推理深度">${modelReasoning[m.spec]}</span>` : ""}${m.spec === cur ? "<span>✓</span>" : ""}</div>`
       ).join("")
     ).join("")
     : `<div class="mempty">没有匹配「${esc($("modelSearchInput")?.value ?? "")}」的模型</div>`
@@ -2098,19 +2123,27 @@ function renderModelMenu() {
     `<div class="msearch"><span class="sico"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/><line x1="10.4" y1="10.4" x2="14" y2="14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span><input id="modelSearchInput" placeholder="搜索模型…" value="${esc($("modelSearchInput")?.value ?? "")}"></div>` +
     `<div class="mlist">${items}</div>` +
     `<div class="madd" id="mAddEntry">＋ 添加模型…</div>`
-  $("modelMenu").querySelectorAll(".mi").forEach((el) => el.onclick = () => {
-    pickModel(el.dataset.spec)
+  $("modelMenu").querySelectorAll(".mi").forEach((el) => {
+    el.onclick = () => { pickModel(el.dataset.spec); hideReasonPop() }
+    // T129：悬停 600ms 自动浮出推理深度卡片（放一会再出，不抢点击）
+    let hoverTimer = null
+    el.addEventListener("mouseenter", () => {
+      hoverTimer = setTimeout(() => showReasonPop(el), 600)
+    })
+    el.addEventListener("mouseleave", () => { clearTimeout(hoverTimer); hideReasonPop() })
   })
-  // T129：推理档位按钮（阻止冒泡到 .mi 的 select 逻辑）
-  $("modelMenu").querySelectorAll(".mre-btn").forEach((el) => el.onclick = async (e) => {
-    e.stopPropagation()
-    const spec = el.dataset.spec, effort = el.dataset.effort
+  // T129：推理深度卡片按钮（阻止冒泡到 .mi 的 select 逻辑）
+  $("reasonPopBtns").addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-effort]")
+    if (!btn) return
+    const spec = $("reasonPop").dataset.spec
+    const effort = btn.dataset.effort
     await fetch("/api/model/reasoning", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ spec, effort }) })
-    modelReasoning[spec] = effort || undefined
-    if (!effort) delete modelReasoning[spec]
-    renderModelMenu() // 重渲染更新徽标与 on 状态
-    $("modelSearchInput")?.focus()
+    if (effort) modelReasoning[spec] = effort; else delete modelReasoning[spec]
+    renderModelMenu() // 刷新徽标
+    hideReasonPop()
   })
+  $("reasonPop").addEventListener("mouseleave", () => hideReasonPop())
   $("mAddEntry").onclick = () => { closeModelMenu(); openAddModelModal() }
   const si = $("modelSearchInput")
   si.oninput = () => {
