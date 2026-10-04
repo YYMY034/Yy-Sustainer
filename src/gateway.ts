@@ -2111,6 +2111,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     cfg.notify = {
       toast: typeof body.toast === "boolean" ? body.toast : (cfg.notify?.toast ?? true),
       url: typeof body.url === "string" ? body.url.trim() : (cfg.notify?.url ?? ""),
+      // T125：只推失败开关（未随请求携带则保留现值）
+      onlyFailure: typeof body.onlyFailure === "boolean" ? body.onlyFailure : (cfg.notify?.onlyFailure ?? false),
     }
     saveConfig(cfg)
     return json(res, 200, { ok: true, notify: cfg.notify })

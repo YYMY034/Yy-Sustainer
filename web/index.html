@@ -1394,7 +1394,7 @@
           <div class="sl">已有备份<div class="sd" id="bkList"></div></div>
         </div>
         <div class="set-row">
-          <div class="sl">完成通知<div class="sd">回合/定时任务完成时本地弹窗；填 webhook 地址可推送到手机（ntfy 主题地址或 Server酱 SendKey，POST 正文即文本）</div></div>
+          <div class="sl">完成通知<div class="sd">回合/定时任务完成时本地弹窗；填 webhook 地址可推送到手机（ntfy 主题地址或 Server酱 SendKey，POST 正文即文本）。「只推失败」= 成功静默，适合无人值守免打扰</div><div class="seg" id="segOnlyFail"><button data-on="0">全部通知</button><button data-on="1">只推失败</button></div></div>
           <div class="bk-fields"><input id="notifyUrl" placeholder="https://ntfy.sh/你的主题（留空只本地弹窗）"><button class="abtn" id="notifySave">保存</button><button class="abtn ghost" id="notifyTest" title="本地弹窗 + webhook 各发一条测试消息">测试</button></div>
         </div>
         <div class="set-row" style="border-bottom:none;">
@@ -4755,6 +4755,7 @@ async function loadDataSec() {
     $("bkKeep").value = d.config.keep ?? 14
     $("bkEvery").value = d.config.intervalHours ?? 24
     $("notifyUrl").value = d.notify?.url ?? ""
+    $("segOnlyFail").querySelectorAll("button").forEach((b) => b.classList.toggle("active", (b.dataset.on === "1") === (d.notify?.onlyFailure === true)))
     const row = $("bkListRow")
     if ((d.backups ?? []).length) {
       row.style.display = ""
@@ -4815,6 +4816,11 @@ $("bkRun").onclick = async () => {
   $("bkRun").textContent = "立即备份"
   loadDataSec()
 }
+$("segOnlyFail").querySelectorAll("button").forEach((b) => b.onclick = async () => {
+  // T125：只推失败开关——点击即存（与保存按钮解耦，语义就是一个开关）
+  const onlyFailure = b.dataset.on === "1"
+  await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: $("notifyUrl").value.trim(), onlyFailure }) })
+})
 $("notifySave").onclick = async () => {
   await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: $("notifyUrl").value.trim() }) })
   $("status").textContent = "通知设置已保存"

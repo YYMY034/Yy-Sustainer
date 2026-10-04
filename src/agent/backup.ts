@@ -4,7 +4,7 @@ import { spawn } from "node:child_process"
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { loadConfig } from "./config.js"
+import { appRoot, loadConfig } from "./config.js"
 
 const ROOT = join(homedir(), ".yyagent")
 const BACKUP_DIR = join(ROOT, "backups")
@@ -21,7 +21,7 @@ export function listBackups(): BackupInfo[] {
   try {
     if (!existsSync(BACKUP_DIR)) return []
     return readdirSync(BACKUP_DIR)
-      .filter((f) => f.startsWith("backup-") && f.endsWith(".zip"))
+      .filter((f) => (f.startsWith("backup-") && f.endsWith(".zip")) || (f.startsWith("repo-bundle-") && f.endsWith(".bundle")))
       .map((f) => {
         const st = statSync(join(BACKUP_DIR, f))
         return { file: f, name: f, size: st.size, mtime: st.mtimeMs }
@@ -30,6 +30,27 @@ export function listBackups(): BackupInfo[] {
   } catch {
     return []
   }
+}
+
+/**
+ * T127：仓库历史 git bundle 备份。数据 zip（会话/记忆/配置）覆盖不了**代码历史**——
+ * 引擎源码的 git 提交只在本地仓库里，未推送期间磁盘损坏 = 全部开发归零（2026-10-03 实况）。
+ * bundle 记录全部 refs，随时 `git clone <bundle>` 恢复。开发态（有 .git）才做，打包态静默跳过。
+ * 滚动保留与数据 zip 共用 keep 池（bundle 按文件名前缀区分）。
+ */
+function createRepoBundle(out: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const gitDir = join(appRoot(), ".git")
+    if (!existsSync(gitDir)) return resolve() // 打包态/非 git 环境：静默跳过
+    const p = spawn("git", ["bundle", "create", out, "--all"], { cwd: appRoot(), windowsHide: true })
+    let err = ""
+    p.stderr?.on("data", (d) => { err += String(d) })
+    p.on("error", (e) => reject(e as Error))
+    p.on("exit", (code) => {
+      if (code !== 0) { try { unlinkSync(out) } catch { /* 忽略 */ } return reject(new Error(`git bundle 退出码 ${code}：${err.slice(0, 200)}`)) }
+      resolve()
+    })
+  })
 }
 
 /** 立即执行一次备份；成功返回文件名，失败抛错（调用方决定是否静默） */
@@ -51,11 +72,18 @@ export function runBackupNow(): Promise<BackupInfo> {
     p.on("exit", (code) => {
       if (code !== 0) { try { unlinkSync(out) } catch { /* 忽略 */ } return reject(new Error(err.slice(0, 300) || `tar 退出码 ${code}`)) }
       try {
-        // 滚动保留：超出 keep 的最旧备份删除
-        const all = listBackups()
-        for (const old of all.slice(keep)) { try { unlinkSync(join(BACKUP_DIR, old.file)) } catch { /* 忽略 */ } }
-        const st = statSync(out)
-        resolve({ file: out, name: out.split(/[\\/]/).pop()!, size: st.size, mtime: st.mtimeMs })
+        // T127：代码历史随行——数据 zip 之外再打一份仓库 bundle。
+        // bundle 失败**不拖累**数据备份（它是加分项）：无论成败都走滚动保留并 resolve。
+        const finish = () => {
+          try {
+            const all = listBackups()
+            for (const old of all.slice(keep)) { try { unlinkSync(join(BACKUP_DIR, old.file)) } catch { /* 忽略 */ } }
+            const st = statSync(out)
+            resolve({ file: out, name: out.split(/[\\/]/).pop()!, size: st.size, mtime: st.mtimeMs })
+          } catch (e) { reject(e as Error) }
+        }
+        createRepoBundle(join(BACKUP_DIR, `repo-bundle-${stamp}.bundle`))
+          .then(finish, (e) => { console.error(`[备份] repo bundle 跳过：${(e as Error).message.slice(0, 120)}`); finish() })
       } catch (e) { reject(e as Error) }
     })
   })
