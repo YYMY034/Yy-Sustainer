@@ -1,5 +1,16 @@
 // Yy Sustainer Electron 壳：只负责拉起引擎网关子进程 + 开窗口。引擎逻辑零改动。
 //
+// T129：单实例锁——防止多开导致系统托盘出现多个图标（用户实测反馈）
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on("second-instance", () => {
+    // 有人试图再开一个实例 → 把已有窗口调到前台
+    if (mainWindow) { mainWindow.show(); mainWindow.focus() }
+  })
+}
+//
 // 发行版（打包后）与开发态走**两条不同的启动路径**：
 //  · 开发态：系统 node + node_modules/tsx 直接解释 src/gateway.ts（热改即生效，方便调试）
 //  · 发行版：Electron 自带的 Node（ELECTRON_RUN_AS_NODE=1）执行 dist/gateway.mjs 单文件包
