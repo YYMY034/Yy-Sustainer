@@ -4851,6 +4851,16 @@ $("notifySave").onclick = async () => {
   await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: $("notifyUrl").value.trim() }) })
   $("status").textContent = "通知设置已保存"
 }
+$("notifyTest").onclick = async () => {
+  await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: $("notifyUrl").value.trim() }) })
+  $("notifyTest").textContent = "发送中…"
+  try {
+    const r = await (await fetch("/api/notify/test", { method: "POST" })).json()
+    const msg = r.webhook === null ? "本地弹窗已发送（未配 webhook）" : r.webhook === "ok" ? "本地弹窗 + webhook 均已发送 ✓" : `本地弹窗已发送；webhook 失败：${r.webhook}`
+    $("status").textContent = msg
+  } catch (e) { $("status").textContent = `测试失败：${e.message}` }
+  $("notifyTest").textContent = "测试"
+}
 // T88 沙箱配置：开关 + 镜像
 $("segSandbox").querySelectorAll("button").forEach((b) => b.onclick = async () => {
   await fetch("/api/sandbox/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: b.dataset.on === "1" }) })
