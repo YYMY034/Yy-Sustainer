@@ -74,6 +74,9 @@ try {
       // 默认把窗口压到 30000：真实固定开销约 25k/步，这样第二轮必然触发压缩，
       // 于是能验证「真模型生成的滚动摘要」质量——而不是只有机制。
       contextTokens: Number(process.env.LT_CONTEXT_TOKENS ?? 30000),
+      // T128：主对话推理档位——reasoning 模型（step-3.7-flash）在默认档下每步输出 26k+ 推理
+      // token，是长任务的成本大头。对照实验用 LT_REASONING_EFFORT 调节。
+      ...(process.env.LT_REASONING_EFFORT ? { reasoningEffort: process.env.LT_REASONING_EFFORT } : {}),
     }, null, 2),
   )
 

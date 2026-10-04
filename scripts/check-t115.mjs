@@ -28,7 +28,7 @@ check("压缩调用接线", /generateText\(\{[\s\S]{0,300}providerOptions: inter
 check("钩子判定接线", judge.includes("providerOptions: internalProviderOptions(providerName)"))
 check("识图转述接线", vision.includes("providerOptions: internalProviderOptions(providerName)"))
 check("compactBase agent 调用接线（拆分器等）", loop.includes("? { providerOptions: internalProviderOptions(providerName) }"))
-check("主对话可选档位以 config.reasoningEffort 为前提（未配不透传，T117）", loop.includes("? { providerOptions: { [providerName]: { reasoningEffort: config.reasoningEffort } } }"))
+check("主对话可选档位（T128：ui.reasoningEffort 优先，顶层兜底）", loop.includes("(config.ui?.reasoningEffort || config.reasoningEffort)"))
 check("收敛续跑段与主轮同源（providerOptions 随 prep 传递）", loop.includes("...(prep.providerOptions ? { providerOptions: prep.providerOptions } : {})"))
 check("providerOptions 字面量出现次数（压缩 + 接口 + 收敛两处 + 主对话两分支 + 钩子无关）", (loop.match(/providerOptions/g) || []).length === 7)
 

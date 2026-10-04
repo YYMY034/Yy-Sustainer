@@ -1438,6 +1438,10 @@
           </div>
         </div>
         <div class="set-row" style="border-bottom:none;">
+          <div class="sl">推理深度<div class="sd">reasoning 模型的思考预算——低 = 响应快 ~10×、成本低 ~90%，日常任务够用；默认 = 服务端出最大思考量，适合复杂架构/难 bug。实测 A/B：同一任务 low 档 2 分钟 vs 默认档 23 分钟，输出 token -97%（T128）</div></div>
+          <div class="seg" id="segReasoning"><button data-v="">默认</button><button data-v="low">低</button><button data-v="medium">中</button><button data-v="high">高</button></div>
+        </div>
+        <div class="set-row" style="border-bottom:none;">
           <div class="sl">默认生图模型<div class="sd">imggen 生成图片时优先使用的模型通道（需服务商支持 images/generations 接口，如通义万相、DALL·E 兼容接口）；留空 = 自动遍历所有通道尝试</div></div>
           <div class="model-select">
             <button class="ms-btn" id="setImageBtn"><span id="setImageLabel">（不设置）</span><span class="chev">▾</span></button>
@@ -4756,6 +4760,9 @@ async function loadDataSec() {
     $("bkEvery").value = d.config.intervalHours ?? 24
     $("notifyUrl").value = d.notify?.url ?? ""
     $("segOnlyFail").querySelectorAll("button").forEach((b) => b.classList.toggle("active", (b.dataset.on === "1") === (d.notify?.onlyFailure === true)))
+    // T128：推理深度回显（config.reasoningEffort，空 = 服务端默认）
+    const re = d.config?.reasoningEffort ?? ""
+    $("segReasoning").querySelectorAll("button").forEach((b) => b.classList.toggle("active", (b.dataset.v || "") === re))
     const row = $("bkListRow")
     if ((d.backups ?? []).length) {
       row.style.display = ""
@@ -4825,6 +4832,12 @@ $("notifySave").onclick = async () => {
   await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: $("notifyUrl").value.trim() }) })
   $("status").textContent = "通知设置已保存"
 }
+$("segReasoning").querySelectorAll("button").forEach((b) => b.onclick = async () => {
+  // T128：推理深度设置（空 = 恢复服务端默认）
+  const v = b.dataset.v || ""
+  await fetch("/api/ui", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reasoningEffort: v || null }) })
+  $("status").textContent = v ? `推理深度：${v}` : "推理深度：恢复服务端默认"
+})
 $("notifyTest").onclick = async () => {
   // T120：先保存再测试（测的是当前输入框里的配置）
   await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: $("notifyUrl").value.trim() }) })

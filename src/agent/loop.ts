@@ -505,11 +505,12 @@ async function prepare(
     messages,
     tools,
     // T115：内部单一职责调用（compactBase：拆分器等）→ reasoning 降 low 档；主对话不设限
-    // T117：主对话可选配置档位（config.reasoningEffort，未配 = 服务端默认）
+    // T117/T128：主对话推理档位——设置页走 cfg.ui.reasoningEffort，程序化走顶层 config.reasoningEffort
+    // （两者都未配 = 服务端默认，不透传）
     ...(opts.compactBase
       ? { providerOptions: internalProviderOptions(providerName) }
-      : config.reasoningEffort
-        ? { providerOptions: { [providerName]: { reasoningEffort: config.reasoningEffort } } }
+      : (config.ui?.reasoningEffort || config.reasoningEffort)
+        ? { providerOptions: { [providerName]: { reasoningEffort: (config.ui?.reasoningEffort || config.reasoningEffort) as string } } }
         : {}),
     stopWhen: [
       stepCountIs(opts.maxSteps ?? config.maxSteps ?? 50),
