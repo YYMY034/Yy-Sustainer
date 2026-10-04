@@ -505,13 +505,17 @@ async function prepare(
     messages,
     tools,
     // T115：内部单一职责调用（compactBase：拆分器等）→ reasoning 降 low 档；主对话不设限
-    // T117/T128：主对话推理档位——设置页走 cfg.ui.reasoningEffort，程序化走顶层 config.reasoningEffort
-    // （两者都未配 = 服务端默认，不透传）
+    // T129：每模型推理档位（模型选择器悬停卡片写入 cfg.modelReasoning），
+    //       兜底链：per-model → 设置页全局（ui.reasoningEffort / 顶层）→ 服务端默认
     ...(opts.compactBase
       ? { providerOptions: internalProviderOptions(providerName) }
-      : (config.ui?.reasoningEffort || config.reasoningEffort)
-        ? { providerOptions: { [providerName]: { reasoningEffort: (config.ui?.reasoningEffort || config.reasoningEffort) as string } } }
-        : {}),
+      : (() => {
+          const spec = `${providerName}/${modelId}`
+          const perModel = config.modelReasoning?.[spec]
+          const global = config.ui?.reasoningEffort || config.reasoningEffort
+          const effort = perModel || global
+          return effort ? { providerOptions: { [providerName]: { reasoningEffort: effort as string } } } : {}
+        })()),
     stopWhen: [
       stepCountIs(opts.maxSteps ?? config.maxSteps ?? 50),
       // T85：长任务模式按会话覆盖收敛阈值（opts 优先，默认 3 分钟）

@@ -738,7 +738,15 @@
   #modelMenu .mi::before { content: ""; position: absolute; left: 16px; top: 50%; width: 4px; height: 1px; background: var(--border); }
   #modelMenu .mi:hover { background: var(--panel); }
   #modelMenu .mi.active { color: var(--accent); }
-  #modelMenu .mi .prov { font-size: 11px; color: var(--dim); flex-shrink: 0; }
+  #modelMenu .mi .prov
+  /* T129：推理档位行——悬停 .mi 展开，默认隐藏 */
+  #modelMenu .mre { display: none; align-items: center; gap: 4px; padding: 4px 0 2px; width: 100%; }
+  #modelMenu .mi:hover .mre { display: flex; }
+  #modelMenu .mre-label { font-size: 10px; color: var(--dim); flex-shrink: 0; }
+  #modelMenu .mre-btn { border: 1px solid var(--border); background: transparent; color: var(--dim); font-size: 10px; padding: 1px 6px; border-radius: 4px; cursor: pointer; }
+  #modelMenu .mre-btn:hover { color: var(--text); border-color: var(--text); }
+  #modelMenu .mre-btn.on { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  #modelMenu .mre-badge { font-size: 9px; color: var(--accent); padding: 0 4px; border: 1px solid var(--accent); border-radius: 3px; flex-shrink: 0; } { font-size: 11px; color: var(--dim); flex-shrink: 0; }
   #modelMenu .mempty { padding: 14px 12px; font-size: 12px; color: var(--dim); text-align: center; }
   #modelMenu .madd { margin-top: 6px; border-top: 1px solid var(--border); padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--dim); display: flex; align-items: center; gap: 7px; }
   #modelMenu .madd:hover { background: var(--panel); color: var(--accent); }
@@ -2064,6 +2072,11 @@ function filteredModels() {
   const q = ($("modelSearchInput")?.value ?? "").trim().toLowerCase()
   return q ? models.filter((m) => m.spec.toLowerCase().includes(q)) : models
 }
+// T129：每模型推理档位缓存（model menu 悬停卡片读写）
+let modelReasoning = {}
+async function fetchModelReasoning() {
+  try { modelReasoning = (await (await fetch("/api/model/reasoning")).json())?.map ?? {} } catch { modelReasoning = {} }
+}
 function renderModelMenu() {
   const list = filteredModels()
   const cur = pickerValue()
@@ -2079,7 +2092,7 @@ function renderModelMenu() {
     ? groups.map((g) =>
       `<div class="mg"><span class="dot"></span><span class="mname" title="${esc(g.provider)}">${esc(g.provider)}</span><span class="mc">${g.items.length}</span></div>` +
       g.items.map((m) =>
-        `<div class="mi ${m.spec === cur ? "active" : ""}" data-spec="${esc(m.spec)}" title="${esc(m.spec)}"><span>${esc(m.modelId || modelShort(m.spec))}</span>${m.spec === cur ? "<span>✓</span>" : ""}</div>`
+        `<div class="mi ${m.spec === cur ? "active" : ""}" data-spec="${esc(m.spec)}" title="${esc(m.spec)}"><span>${esc(m.modelId || modelShort(m.spec))}</span>${modelReasoning[esc(m.spec)] ? `<span class="mre-badge" title="推理深度">${modelReasoning[esc(m.spec)]}</span>` : ""}${m.spec === cur ? "<span>✓</span>" : ""}<div class="mre"><span class="mre-label">推理</span>${["low","medium","high"].map((e) => `<button class="mre-btn ${modelReasoning[esc(m.spec)] === e ? "on" : ""}" data-spec="${esc(m.spec)}" data-effort="${e}">${e}</button>`).join("")}<button class="mre-btn ${!modelReasoning[esc(m.spec)] ? "on" : ""}" data-spec="${esc(m.spec)}" data-effort="">默认</button></div></div>`
       ).join("")
     ).join("")
     : `<div class="mempty">没有匹配「${esc($("modelSearchInput")?.value ?? "")}」的模型</div>`
@@ -2089,6 +2102,16 @@ function renderModelMenu() {
     `<div class="madd" id="mAddEntry">＋ 添加模型…</div>`
   $("modelMenu").querySelectorAll(".mi").forEach((el) => el.onclick = () => {
     pickModel(el.dataset.spec)
+  })
+  // T129：推理档位按钮（阻止冒泡到 .mi 的 select 逻辑）
+  $("modelMenu").querySelectorAll(".mre-btn").forEach((el) => el.onclick = async (e) => {
+    e.stopPropagation()
+    const spec = el.dataset.spec, effort = el.dataset.effort
+    await fetch("/api/model/reasoning", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ spec, effort }) })
+    modelReasoning[spec] = effort || undefined
+    if (!effort) delete modelReasoning[spec]
+    renderModelMenu() // 重渲染更新徽标与 on 状态
+    $("modelSearchInput")?.focus()
   })
   $("mAddEntry").onclick = () => { closeModelMenu(); openAddModelModal() }
   const si = $("modelSearchInput")
@@ -2163,7 +2186,7 @@ function openModelMenu(ctx) {
   pickerCtx = ctx ?? "input"
   const btn = pickerCtx === "input" ? $("modelBtn") : (pickerCtx === "setModel" ? $("setModelBtn") : (pickerCtx === "setImage" ? $("setImageBtn") : $("setVisionBtn")))
   const menu = $("modelMenu")
-  renderModelMenu()
+  fetchModelReasoning().then(() => renderModelMenu())
   menu.classList.add("show")
   const r = btn.getBoundingClientRect()
   const mw = menu.offsetWidth, mh = menu.offsetHeight

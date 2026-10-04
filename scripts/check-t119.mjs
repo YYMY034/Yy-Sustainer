@@ -48,3 +48,12 @@ check("健康卡展示记忆行", web.includes('id="memorySummary"') && web.incl
 
 console.log(`\n合计：${pass} 通过 / ${fail} 失败`)
 process.exit(fail ? 1 : 0)
+
+// T129：每模型推理档位（模型选择器悬停卡片）
+const cfgR = read("src/agent/config.ts")
+check("config 有 modelReasoning 映射", cfgR.includes("modelReasoning?: Record<string, string>"))
+check("gateway 有 /api/model/reasoning 路由", gw.includes("/api/model/reasoning"))
+check("prepare 按 spec 读 modelReasoning 并兜底全局", loop.includes("config.modelReasoning?.[spec]") && loop.includes("config.ui?.reasoningEffort || config.reasoningEffort"))
+check("web 模型行内嵌推理档位按钮", web.includes("class=\"mre-btn") && web.includes("data-effort"))
+check("web 有当前档位徽标", web.includes("mre-badge"))
+check("openModelMenu 拉推理缓存", web.includes("fetchModelReasoning"))

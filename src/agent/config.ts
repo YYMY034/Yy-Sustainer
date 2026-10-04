@@ -187,6 +187,12 @@ export interface YyagentConfig {
   /** T119：全局并发上限——同时跑的 agent 回合数（交互+定时任务合计），超出排队等待。默认 2，0 = 不限 */
   maxConcurrentRuns?: number
   /**
+   * T129：每模型的推理档位映射。key = "provider/modelId"（如 "stepfun/step-3.7-flash"），
+   * value = "low" | "medium" | "high"。设置页的全局 reasoningEffort 做兜底，
+   * 此映射优先（模型选择器悬停卡片写入）。未配置的模型走服务端默认。
+   */
+  modelReasoning?: Record<string, string>
+  /**
    * T117：主对话推理档位（reasoning_effort，如 low/medium/high）——**未配 = 服务端默认，不透传**。
    * 内部单一职责调用已经固定 low（internalProviderOptions）；这里只影响主对话：
    * 调低换响应速度（reasoning 模型每步思考 10s+），深度会打折，谨慎设置。
