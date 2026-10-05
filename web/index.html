@@ -2108,8 +2108,25 @@ function showReasonPop(el) {
   $("reasonPopName").textContent = name
   const cur = modelReasoning[spec] || ""
   $("reasonPopBtns").innerHTML = ["low","medium","high",""].map((e) =>
-      `<button data-effort="${e}" style="border:1px solid ${cur === e ? "var(--accent)" : "var(--border)"}; color:${cur === e ? "var(--accent)" : "var(--dim)"}; background:transparent; font-size:11px; padding:3px 10px; border-radius:6px; cursor:pointer;">${e || "默认"}</button>`
+      `<button data-effort="${e}" style="border:1px solid ${cur === e ? "var(--accent)" : "var(--border)"}; color:${cur === e ? "var(--accent)" : "var(--dim)"}; background:transparent; font-size:11px; padding:3px 10px; border-radius:6px; cursor:pointer; transition:all .15s ease;">${e || "默认"}</button>`
     ).join("")
+  // T129：档位按钮点击处理器——之前遗漏（按钮渲染了但无监听器，点了没反应）
+  $("reasonPopBtns").querySelectorAll("button").forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.stopPropagation()
+      const effort = btn.dataset.effort
+      const spec = pop.dataset.spec
+      await fetch("/api/model/reasoning", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ spec, effort }) })
+      if (effort) modelReasoning[spec] = effort; else delete modelReasoning[spec]
+      // 原地高亮 + transition
+      $("reasonPopBtns").querySelectorAll("button").forEach((b) => {
+        const on = (b.dataset.effort || "") === effort
+        b.style.borderColor = on ? "var(--accent)" : "var(--border)"
+        b.style.color = on ? "var(--accent)" : "var(--dim)"
+      })
+      renderModelMenu() // 刷新模型行徽标
+    }
+  })
   const r = el.getBoundingClientRect()
   const popW = 220
   let x = r.right + 8
