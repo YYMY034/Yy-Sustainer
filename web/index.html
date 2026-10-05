@@ -868,9 +868,11 @@
      新样式只挂在 .set-shell/.set-nav 与 #setBody 上 —— .page/.page-body/.acard 与 #autoPage 共用，不动。 */
   .set-shell { flex: 1; display: flex; min-height: 0; }
   .set-nav { width: 194px; flex-shrink: 0; border-right: 1px solid var(--border); padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
-  .set-nav .sn-item { display: block; width: 100%; text-align: left; background: transparent; border: none; color: var(--dim); font: inherit; font-size: 13px; padding: 8px 12px; border-radius: 9px; cursor: pointer; white-space: nowrap; transition: background .14s ease, color .14s ease; }
+  .set-nav .sn-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: transparent; border: none; color: var(--dim); font: inherit; font-size: 13px; padding: 8px 12px; border-radius: 9px; cursor: pointer; white-space: nowrap; transition: background .14s ease, color .14s ease; }
   .set-nav .sn-item:hover { background: var(--panel2); color: var(--text); }
   .set-nav .sn-item.active { background: var(--panel2); color: var(--accent); font-weight: 600; }
+  .set-nav .sn-item svg { flex-shrink: 0; opacity: .65; transition: opacity .14s ease; }
+  .set-nav .sn-item.active svg { opacity: 1; }
   #setBody { padding: 20px 22px 28px; }
   #setBody .acard { scroll-margin-top: 8px; }
 
@@ -1328,16 +1330,16 @@
          不动公用类 —— 自动化页布局保持不变。 -->
     <div class="set-shell">
       <nav class="set-nav" id="setNav">
-        <button class="sn-item active" data-sec="secUsage">使用统计</button>
-        <button class="sn-item" data-sec="secAppearance">外观</button>
-        <button class="sn-item" data-sec="secHooks">钩子</button>
-        <button class="sn-item" data-sec="secData">数据与安全</button>
-        <button class="sn-item" data-sec="secModel">模型</button>
-        <button class="sn-item" data-sec="secSearch">搜索引擎</button>
-        <button class="sn-item" data-sec="secDb">数据库</button>
-        <button class="sn-item" data-sec="secMcp">MCP 服务器</button>
-        <button class="sn-item" data-sec="secHotkey">快捷键</button>
-        <button class="sn-item" data-sec="secAbout">关于</button>
+        <button class="sn-item active" data-sec="secUsage"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 13V8m3.75 5V4m3.75 9V6.5m3.75 6.5V2" stroke-linecap="round"/></svg>使用统计</button>
+        <button class="sn-item" data-sec="secAppearance"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="2.5"/><path d="M8 2v3.5M8 10.5V14M2 8h3.5M10.5 8H14" stroke-linecap="round"/></svg>外观</button>
+        <button class="sn-item" data-sec="secHooks"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M8 1.5c2 2.5 5 3.5 5 7a5 5 0 01-10 0c0-2 1-3.5 2.5-4.5" stroke-linecap="round"/><path d="M8 5v6" stroke-linecap="round"/><circle cx="8" cy="11" r="1.5"/></svg>钩子</button>
+        <button class="sn-item" data-sec="secData"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M8 1.5l5.5 2.5v4c0 3-2.2 5.5-5.5 6.5-3.3-1-5.5-3.5-5.5-6.5V4L8 1.5z" stroke-linejoin="round"/><path d="M5.5 8l1.8 1.8 3.2-3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>数据与安全</button>
+        <button class="sn-item" data-sec="secModel"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3" y="3" width="10" height="10" rx="2"/><rect x="6" y="6" width="4" height="4" rx="1"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2" stroke-linecap="round"/></svg>模型</button>
+        <button class="sn-item" data-sec="secSearch"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="7" cy="7" r="4.5"/><line x1="10.4" y1="10.4" x2="14" y2="14" stroke-linecap="round"/></svg>搜索引擎</button>
+        <button class="sn-item" data-sec="secDb"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><ellipse cx="8" cy="3.5" rx="5.5" ry="2"/><path d="M2.5 3.5v9c0 1.1 2.46 2 5.5 2s5.5-.9 5.5-2v-9"/><path d="M2.5 8c0 1.1 2.46 2 5.5 2s5.5-.9 5.5-2"/></svg>数据库</button>
+        <button class="sn-item" data-sec="secMcp"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="5" rx="1"/><rect x="2" y="9" width="12" height="5" rx="1"/><circle cx="5" cy="4.5" r=".8"/><circle cx="5" cy="11.5" r=".8"/></svg>MCP 服务器</button>
+        <button class="sn-item" data-sec="secHotkey"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="4" width="13" height="8" rx="1.5"/><path d="M4 6.5h.01M6.5 6.5h.01M9 6.5h.01M11.5 6.5h.01M4 9.5h.01M6.5 9.5h.01M9 9.5h.01M11.5 9.5h.01M5.5 12h5" stroke-linecap="round"/></svg>快捷键</button>
+        <button class="sn-item" data-sec="secAbout"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="6"/><path d="M8 7v4" stroke-linecap="round"/><circle cx="8" cy="4.8" r=".7" fill="currentColor" stroke="none"/></svg>关于</button>
       </nav>
       <div class="page-body" id="setBody"><div class="page-inner">
       <!-- T44 使用统计：全部会话 token 累加（/api/sessions 的 meta.usage 求和），打开设置页时刷新 -->
