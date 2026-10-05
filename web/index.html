@@ -2081,6 +2081,7 @@ async function fetchModelReasoning() {
   try { modelReasoning = (await (await fetch("/api/model/reasoning")).json())?.map ?? {} } catch { modelReasoning = {} }
 }
 function showReasonPop(el) {
+  cancelReasonPopHide()
   const spec = el.dataset.spec
   const name = el.dataset.title || spec
   const pop = $("reasonPop")
@@ -2098,7 +2099,12 @@ function showReasonPop(el) {
   pop.style.top = Math.max(8, r.top - 4) + "px"
   pop.style.display = "block"
 }
-function hideReasonPop() { $("reasonPop").style.display = "none" }
+let reasonPopHideTimer = null
+function hideReasonPop() {
+  clearTimeout(reasonPopHideTimer)
+  reasonPopHideTimer = setTimeout(() => { $("reasonPop").style.display = "none" }, 300)
+}
+function cancelReasonPopHide() { clearTimeout(reasonPopHideTimer) }
 
 function renderModelMenu() {
   const list = filteredModels()
@@ -2143,6 +2149,7 @@ function renderModelMenu() {
     renderModelMenu() // 刷新徽标
     hideReasonPop()
   })
+  $("reasonPop").addEventListener("mouseenter", () => cancelReasonPopHide())
   $("reasonPop").addEventListener("mouseleave", () => hideReasonPop())
   $("mAddEntry").onclick = () => { closeModelMenu(); openAddModelModal() }
   const si = $("modelSearchInput")
@@ -2217,7 +2224,8 @@ function openModelMenu(ctx) {
   pickerCtx = ctx ?? "input"
   const btn = pickerCtx === "input" ? $("modelBtn") : (pickerCtx === "setModel" ? $("setModelBtn") : (pickerCtx === "setImage" ? $("setImageBtn") : $("setVisionBtn")))
   const menu = $("modelMenu")
-  fetchModelReasoning().then(() => renderModelMenu())
+  renderModelMenu() // 立即用缓存渲染（首次打开不闪空）
+  fetchModelReasoning().then(() => renderModelMenu()) // 异步更新推理档位
   menu.classList.add("show")
   const r = btn.getBoundingClientRect()
   const mw = menu.offsetWidth, mh = menu.offsetHeight
