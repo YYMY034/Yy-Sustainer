@@ -23,9 +23,9 @@ writeFileSync(join(HOME, ".yyagent", "config.json"), JSON.stringify({
 const PORT = await pickFreePort()
 const BASE = `http://127.0.0.1:${PORT}`
 let pass = 0, fail = 0
-const check = (label, ok, extra = "") => { ok ? pass++ : fail++; console.log(`${ok ? "ok  " : "FAIL"} ${label}${extra ? " — " + extra : ""}`) }
-const post = async (p, body) => { const r = await fetch(BASE + p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); return { status: r.status, data: await r.json() } }
-const get = async (p) => { const r = await fetch(BASE + p); return { status: r.status, data: await r.json() } }
+const check = (label: string, ok: boolean, extra = "") => { ok ? pass++ : fail++; console.log(`${ok ? "ok  " : "FAIL"} ${label}${extra ? " — " + extra : ""}`) }
+const post = async (p: string, body: unknown) => { const r = await fetch(BASE + p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); return { status: r.status, data: await r.json() } }
+const get = async (p: string) => { const r = await fetch(BASE + p); return { status: r.status, data: await r.json() } }
 
 const gw = spawn(process.execPath, ["--import", "tsx", "src/gateway.ts"], {
   cwd: process.cwd(), env: { ...process.env, HOME, USERPROFILE: HOME, YYAGENT_GATEWAY_PORT: String(PORT) }, stdio: "ignore",
@@ -55,7 +55,7 @@ for (let i = 0; i < 60; i++) { try { const r = await fetch(`${BASE}/api/state`, 
   const r = await post("/api/backup/run", {})
   check("备份：立即运行", r.data.ok === true || r.data.file, JSON.stringify(r.data).slice(0, 100))
   const backups = (await get("/api/backup")).data.backups ?? []
-  check("备份：产物落盘且有 bundle", backups.length > 0 && backups.some(b => b.name.includes("bundle")), `${backups.length} 个文件`)
+  check("备份：产物落盘且有 bundle", backups.length > 0 && backups.some((b: { name: string }) => b.name.includes("bundle")), `${backups.length} 个文件`)
 }
 
 // ---- 白名单 ----
@@ -111,8 +111,8 @@ for (let i = 0; i < 60; i++) { try { const r = await fetch(`${BASE}/api/state`, 
   const r = await post("/api/hooks/create", { name: "测试钩子", prompt: "检查输出是否合格" })
   check("钩子：创建", r.status === 200, JSON.stringify(r.data).slice(0, 80))
   const hooks = (await get("/api/hooks")).data.hooks ?? []
-  check("钩子：GET 列表包含新建", hooks.some(h => h.name === "测试钩子"))
-  const testHook = hooks.find(h => h.name === "测试钩子")
+  check("钩子：GET 列表包含新建", hooks.some((h: { name: string; id: string }) => h.name === "测试钩子"))
+  const testHook = hooks.find((h: { name: string; id: string }) => h.name === "测试钩子")
   if (testHook) {
     const r2 = await post("/api/hooks/toggle", { id: testHook.id })
     check("钩子：启停", r2.status === 200)

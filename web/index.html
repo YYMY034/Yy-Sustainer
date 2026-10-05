@@ -1315,6 +1315,8 @@
       <div id="autoList"></div>
       <h3 style="font-size:13px; color:var(--dim); margin:18px 0 10px;">后台任务（bash background=true 启动的命令）</h3>
       <div id="bgList"><div class="dim" style="font-size:12px;">（无）</div></div>
+      <h3 style="font-size:13px; color:var(--dim); margin:18px 0 10px;">AI 日报 <button class="abtn ghost" id="aiNewsBtn" style="font-size:11px; padding:3px 10px;">立即搜索</button></h3>
+      <div id="aiNewsList"><div class="dim" style="font-size:12px;">暂无数据——每天 08:00 自动采集，或点上方按钮立即搜索</div></div>
     </div></div>
   </div>
 
@@ -3582,7 +3584,7 @@ async function refreshState() {
   const cur = sessions.find((s) => s.id === activeId)
   if (cur?.ctxPct != null) renderCtx(cur.ctxPct)
   renderTodoBar(st.todo ?? [], busy())
-  if ($("autoPage")?.classList.contains("show")) refreshBgPanel() // T99：自动化页可见时顺带刷新后台任务面板
+  if ($("autoPage")?.classList.contains("show")) { refreshBgPanel(); refreshAiNews() }
   if ($("setPage")?.classList.contains("show")) refreshHealthPanel() // T118：设置页可见时刷新运行健康
   monitorStatus = streamingOn ? streamStatusText : ($("status").textContent ?? "") // T57：流式中监工取输出区状态
   renderMonitor()
@@ -4494,6 +4496,31 @@ async function refreshBgPanel() {
     renderBgPanel()
   } catch { /* 网关没起就不刷 */ }
 }
+// ---- T130：AI 日报 ----
+async function refreshAiNews() {
+  try {
+    const d = await (await fetch("/api/ai-news")).json()
+    renderAiNews(d.items ?? [])
+  } catch { /* 网关没起就不刷 */ }
+}
+function renderAiNews(items) {
+  const box = $("aiNewsList")
+  if (!box) return
+  if (!items.length) { box.innerHTML = `<div class="dim" style="font-size:12px;">暂无数据——每天 08:00 自动采集，或点上方按钮立即搜索</div>`; return }
+  box.innerHTML = items.map((n) => `<div class="tk" style="margin-bottom:6px;"><div class="tn"><span>${esc(n.title || "")}</span><span class="tcron">${esc(String(n.ts || "").slice(0, 10))}</span></div><div class="tprompt">${esc(n.summary || "")}</div>${n.source ? `<div class="tlast"><a href="${esc(n.source)}" target="_blank" rel="noopener" style="color:var(--accent);font-size:11px;">${esc(n.source)}</a></div>` : ""}</div>`).join("")
+}
+$("aiNewsBtn").onclick = async () => {
+  $("aiNewsBtn").textContent = "搜索中…"
+  $("aiNewsBtn").disabled = true
+  try {
+    const r = await post("/api/chat", { text: "搜索今天的 AI 重要新闻（大模型发布/融资/开源/政策），选出 5-8 条最重要的，将结果写入 ~/.yyagent/ai-news.jsonl" })
+    $("status").textContent = "AI 日报搜索完成"
+    refreshAiNews()
+  } catch (e) { $("status").textContent = `搜索失败：${e.message}` }
+  $("aiNewsBtn").textContent = "立即搜索"
+  $("aiNewsBtn").disabled = false
+}
+
 function renderBgPanel() {
   const box = $("bgList")
   if (!box) return

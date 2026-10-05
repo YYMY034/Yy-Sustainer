@@ -2161,6 +2161,14 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     saveConfig(cfg)
     return json(res, 200, { ok: true, spec, effort: cfg.modelReasoning[spec] ?? "" })
   }
+  // T130：AI 日报——读取定时任务采集的新闻缓存（ai-news-daily 每日 08:00 写入）
+  if (m === "GET" && p === "/api/ai-news") {
+    const newsFile = path.join(homedir(), ".yyagent", "ai-news.jsonl")
+    if (!fs.existsSync(newsFile)) return json(res, 200, { items: [] })
+    const lines = fs.readFileSync(newsFile, "utf8").split(/\r?\n/).filter(Boolean)
+    const items = lines.slice(-30).map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+    return json(res, 200, { items: items.reverse() }) // 最新在前
+  }
   // T88 沙箱执行配置：GET 返回 Docker 可用性 + 当前配置；POST 写 enabled/image（saveConfig 即时生效）
   if (m === "GET" && p === "/api/sandbox") {
     const cfg = loadConfig().sandbox ?? {}
