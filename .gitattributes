@@ -1,0 +1,22 @@
+* text=auto
+*.ts text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.svg text eol=lf
+*.md eol=lf
+*.txt text eol=lf
+*.ico binary
+*.png binary
+*.exe binary
+*.dll binary
+*.pak binary
+*.asar binary
+*.bin binary
+*.bundle binary
+EOF
