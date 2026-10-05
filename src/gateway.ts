@@ -2147,6 +2147,20 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     }
     return json(res, 200, { ok: true, toast: true, webhook })
   }
+  // T129：每模型推理档位——模型选择器悬停卡片读写
+  if (m === "GET" && p === "/api/model/reasoning") return json(res, 200, { map: loadConfig().modelReasoning ?? {} })
+  if (m === "POST" && p === "/api/model/reasoning") {
+    const body = JSON.parse((await readBody(req)) || "{}")
+    const spec = String(body.spec ?? "").trim()
+    const effort = String(body.effort ?? "").trim()
+    if (!spec) return json(res, 400, { error: "spec 必填" })
+    const cfg = loadConfig()
+    if (!cfg.modelReasoning) cfg.modelReasoning = {}
+    if (["low", "medium", "high"].includes(effort)) cfg.modelReasoning[spec] = effort
+    else delete cfg.modelReasoning[spec] // 空字符串 = 恢复服务端默认
+    saveConfig(cfg)
+    return json(res, 200, { ok: true, spec, effort: cfg.modelReasoning[spec] ?? "" })
+  }
   // T88 沙箱执行配置：GET 返回 Docker 可用性 + 当前配置；POST 写 enabled/image（saveConfig 即时生效）
   if (m === "GET" && p === "/api/sandbox") {
     const cfg = loadConfig().sandbox ?? {}

@@ -2080,6 +2080,25 @@ let modelReasoning = {}
 async function fetchModelReasoning() {
   try { modelReasoning = (await (await fetch("/api/model/reasoning")).json())?.map ?? {} } catch { modelReasoning = {} }
 }
+// T129：模型选择器交互——事件委托挂在 modelMenu 上，innerHTML 重渲染后不需要重挂
+let reasonHoverTimer = null
+function setupModelDelegation() {
+  const menu = $("modelMenu")
+  menu.addEventListener("click", (e) => {
+    const mi = e.target.closest(".mi")
+    if (mi) { pickModel(mi.dataset.spec); hideReasonPop() }
+  })
+  menu.addEventListener("mouseover", (e) => {
+    const mi = e.target.closest(".mi")
+    if (!mi) return
+    clearTimeout(reasonHoverTimer)
+    reasonHoverTimer = setTimeout(() => showReasonPop(mi), 600)
+  })
+  menu.addEventListener("mouseout", (e) => {
+    const mi = e.target.closest(".mi")
+    if (mi) clearTimeout(reasonHoverTimer)
+  })
+}
 function showReasonPop(el) {
   cancelReasonPopHide()
   const spec = el.dataset.spec
@@ -2129,28 +2148,7 @@ function renderModelMenu() {
     `<div class="msearch"><span class="sico"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/><line x1="10.4" y1="10.4" x2="14" y2="14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span><input id="modelSearchInput" placeholder="搜索模型…" value="${esc($("modelSearchInput")?.value ?? "")}"></div>` +
     `<div class="mlist">${items}</div>` +
     `<div class="madd" id="mAddEntry">＋ 添加模型…</div>`
-  $("modelMenu").querySelectorAll(".mi").forEach((el) => {
-    el.onclick = () => { pickModel(el.dataset.spec); hideReasonPop() }
-    // T129：悬停 600ms 自动浮出推理深度卡片（放一会再出，不抢点击）
-    let hoverTimer = null
-    el.addEventListener("mouseenter", () => {
-      hoverTimer = setTimeout(() => showReasonPop(el), 600)
-    })
-    el.addEventListener("mouseleave", () => { clearTimeout(hoverTimer); hideReasonPop() })
-  })
-  // T129：推理深度卡片按钮（阻止冒泡到 .mi 的 select 逻辑）
-  $("reasonPopBtns").addEventListener("click", async (e) => {
-    const btn = e.target.closest("[data-effort]")
-    if (!btn) return
-    const spec = $("reasonPop").dataset.spec
-    const effort = btn.dataset.effort
-    await fetch("/api/model/reasoning", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ spec, effort }) })
-    if (effort) modelReasoning[spec] = effort; else delete modelReasoning[spec]
-    renderModelMenu() // 刷新徽标
-    hideReasonPop()
-  })
-  $("reasonPop").addEventListener("mouseenter", () => cancelReasonPopHide())
-  $("reasonPop").addEventListener("mouseleave", () => hideReasonPop())
+  // T129：.mi 交互改为 modelMenu 级事件委托（见下方 setupModelDelegation），innerHTML 重渲染后无需重挂
   $("mAddEntry").onclick = () => { closeModelMenu(); openAddModelModal() }
   const si = $("modelSearchInput")
   si.oninput = () => {
@@ -2242,6 +2240,7 @@ function openModelMenu(ctx) {
 }
 
 function closeModelMenu() { $("modelMenu").classList.remove("show"); $("modelBtn").classList.remove("open"); $("setModelBtn")?.classList.remove("open"); $("setVisionBtn")?.classList.remove("open"); $("setImageBtn")?.classList.remove("open") }
+setupModelDelegation() // T129：一次性挂事件委托
 
 // P0-7 权限三档总开关
 function renderPermBtn() {
@@ -4005,7 +4004,10 @@ document.addEventListener("click", (e) => {
 })
 $("btnSend").onclick = () => { busy() ? requestStop() : doSend() }
 $("modelBtn").onclick = (e) => { e.stopPropagation(); $("modelMenu").classList.contains("show") ? closeModelMenu() : openModelMenu("input") }
-document.addEventListener("click", (e) => { if (!$("modelMenu").contains(e.target)) closeModelMenu() })
+document.addEventListener("click", (e) => {
+  // T129：reasonPop 也算 modelMenu 的"内部"——点推理档位不该把菜单关掉
+  if (!$("modelMenu").contains(e.target) && !$("reasonPop").contains(e.target)) { closeModelMenu(); hideReasonPop() }
+})
 window.addEventListener("resize", () => { closeModelMenu(); closePermMenu() })
 // P0-7 权限菜单事件
 $("permBtn").onclick = (e) => { e.stopPropagation(); $("permMenu").classList.contains("show") ? closePermMenu() : openPermMenu() }
