@@ -1596,6 +1596,7 @@ function fmtBlock(s) {
   const lines = s.split(/\r?\n/)
   const out = []
   let tableBuf = []
+  let skipBlank = false // T130 修正四：think 占位行后吞空行
   // T15 裸树形画（无围栏）：整段 ≥60% 行含连接符 → 直接气泡导图
   if (looksLikeTree(lines)) {
     const mm = renderMindmap(lines)
@@ -1652,7 +1653,15 @@ function fmtBlock(s) {
   for (const line of lines) {
     // T63 思考折叠块占位行 → 输出可展开的思考块（摘要=末行，点击展开全文）
     const thinkM = line.match(/^@@THINK(\d+)@@$/)
-    if (thinkM) { flushTable(); flushFence(); out.push(thinkBlockHtml(thinkStore[+thinkM[1]] ?? "")); continue }
+    if (thinkM) {
+      flushTable(); flushFence()
+      // T130 修正四：吞掉占位行前的空行——思考块之间累积的换行在 pre-wrap 下渲染成大段空白
+      // （历史消息存的是旧格式 <thinking>\n…\n</thinking>，块间 4-6 个换行 → 100px+ 空隙）
+      while (out.length && out[out.length - 1] === "") out.pop()
+      out.push(thinkBlockHtml(thinkStore[+thinkM[1]] ?? ""))
+      skipBlank = true
+      continue
+    }
     // T15 围栏处理：``` 开/闭切换；围栏内先攒着，闭合时判树形画
     if (/^\s*```/.test(line)) {
       if (fenceBuf) { flushFence() }
@@ -1667,6 +1676,13 @@ function fmtBlock(s) {
     }
     flushTable()
     flushFence()
+    // 空行：think 块后紧跟的空行吞掉；正文连续空行折叠成一个（pre-wrap 下多空行 = 大段空白）
+    if (!line.trim()) {
+      if (skipBlank || out[out.length - 1] === "") continue
+      out.push("")
+      continue
+    }
+    skipBlank = false
     out.push(fmtInline(line))
   }
   flushTable()

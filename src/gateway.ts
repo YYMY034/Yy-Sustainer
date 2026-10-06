@@ -434,7 +434,7 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
     const rawText = (r?.text || "").trim()
     // T101：原生思考落库成 <thinking> 块（Web 端 T63 折叠渲染）。只在用 r.text 时前置——
     // 走 streamedText 兜底的（停止/超时）路径里思考已经随流式带过标签了，再前置就重复
-    const head = rawText && r?.reasoningText ? `<thinking>${r.reasoningText}</thinking>\n\n` : ""
+    const head = rawText && r?.reasoningText ? `<thinking>${r.reasoningText}</thinking>` : ""
     const text = (head + (rawText || streamedText || "")).trim()
     // T93 P3：预算熔断也要和「用户主动停止」分开——都写「已停止」会让人以为是自己点了停止
     if (budgetStopped) {

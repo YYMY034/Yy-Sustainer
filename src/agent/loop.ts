@@ -746,7 +746,7 @@ export async function runAgentStream(
         if (d) {
           if (!inReason) {
             inReason = true
-            handlers.onText?.("<thinking>\n")
+            handlers.onText?.("<thinking>")
           }
           reasoningText += d
           handlers.onText?.(d)
@@ -754,13 +754,13 @@ export async function runAgentStream(
       } else if (inReason) {
         // 从思考切回正文/工具：补上闭合标签，T63 的折叠块才算完整
         inReason = false
-        handlers.onText?.("\n</thinking>\n")
+        handlers.onText?.("</thinking>")
       }
     }
     if (inReason) {
       // 流在思考里被打断（收尾/工具直接开始）：也要闭合，否则落库的是未闭合标签
       inReason = false
-      handlers.onText?.("\n</thinking>\n")
+      handlers.onText?.("</thinking>")
     }
   } catch (e) {
     // abort 是用户主动停止：SDK 的 text/usage promise 也会 reject（AI_NoOutputGeneratedError），吃掉返回空文本——

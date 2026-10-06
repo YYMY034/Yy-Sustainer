@@ -53,6 +53,22 @@ app.whenReady().then(async () => {
     push("点暖橙后 --accent=#f0b45c(深色档)", cs() === "#f0b45c", cs())
     $('[data-accent="graphite"]').click()
     push("切回石墨 --accent=#c8cdd3(深色)", cs() === "#c8cdd3", cs())
+    // 6 T130 修正四：思考块间距——fmtBlock 对旧格式（带 \n padding 的历史消息）与新格式都不产生块间空白
+    const noBlank = (label, src) => {
+      const html = fmtBlock(src)
+      const blocks = html.split('class="think-block"').length - 1
+      push(label + "：两个思考块", blocks === 2, blocks + " blocks")
+      // 思考块之间的部分不允许有空行（\n\n）——pre-wrap 下就是真实空白高度
+      const between = html.slice(html.indexOf("</div></div>") > -1 ? html.indexOf("</div></div>") : 0)
+      push(label + "：块间无空白行", !/\n\s*\n/.test(html.replace(/think-full[\s\S]*?<\/div>/g, "")), JSON.stringify(html.slice(0, 120)))
+    }
+    noBlank("旧格式带padding", "<thinking>\n思考一\n\n</thinking>\n\n\n<thinking>\n思考二\n</thinking>\n\n正文开始")
+    noBlank("极端累积换行", "<thinking>a</thinking>\n\n\n\n\n\n<thinking>b</thinking>")
+    // 正文连续空行折叠成一个（单空行分段保留）
+    const para = fmtBlock("段落一\n\n\n\n\n段落二")
+    push("正文连续空行折叠成一个", (para.match(/\n/g) || []).length === 2, JSON.stringify(para))
+    // 新格式（无 padding）正常渲染
+    push("新格式正常", (fmtBlock("<thinking>新</thinking>结果").match(/think-block/g) || []).length === 1)
     return JSON.stringify(out)
   }.toString()})()`
   try {
