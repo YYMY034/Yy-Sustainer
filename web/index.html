@@ -870,6 +870,11 @@
   .set-nav .sn-item.active { background: var(--panel2); color: var(--accent); font-weight: 600; }
   .set-nav .sn-item svg { flex-shrink: 0; opacity: .65; transition: opacity .14s ease; }
   .set-nav .sn-item.active svg { opacity: 1; }
+  /* T130：主题色选择器 */
+  .acc-dot { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 8px; cursor: pointer; transition: all .14s ease; }
+  .acc-dot:hover { border-color: var(--text); }
+  .acc-dot.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .acc-dot span { width: 14px; height: 14px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
   #setBody { padding: 20px 22px 28px; }
   #setBody .acard { scroll-margin-top: 8px; }
 
@@ -1366,6 +1371,16 @@
           <div class="sl">主题<div class="sd">深色 / 浅色一键切换</div></div>
           <div class="seg" id="segTheme">
             <button data-t="dark">深色</button><button data-t="light">浅色</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="sl">主题色<div class="sd">界面按钮、高亮、链接的颜色——石墨（默认）= 白底黑字中性风；翠绿 = 原始品牌色</div></div>
+          <div id="accentRow" style="display:flex;gap:10px;align-items:center;">
+            <button class="acc-dot" data-accent="graphite" title="石墨（默认）"><span style="background:#4a4f55;"></span>石墨</button>
+            <button class="acc-dot" data-accent="emerald" title="翠绿"><span style="background:#0f9488;"></span>翠绿</button>
+            <button class="acc-dot" data-accent="azure" title="蔚蓝"><span style="background:#2563eb;"></span>蔚蓝</button>
+            <button class="acc-dot" data-accent="violet" title="紫罗兰"><span style="background:#7c3aed;"></span>紫罗兰</button>
+            <button class="acc-dot" data-accent="amber" title="暖橙"><span style="background:#c47a08;"></span>暖橙</button>
           </div>
         </div>
         <!-- T47 问答导轨显隐：localStorage yyagent-rail + body[data-rail] 纯 CSS 联动（规则在 #qaRail.show 旁）；
@@ -4332,6 +4347,7 @@ function applyTheme(t) {
   t = t === "light" ? "light" : "dark" // 防 localStorage 脏值（既非 light 也非 dark 时回退深色）
   document.documentElement.classList.toggle("light", t === "light")
   localStorage.setItem("yyagent-theme", t)
+  applyAccent(localStorage.getItem("yyagent-accent") ?? "graphite", t)
   const sun = document.getElementById("iconSun"), moon = document.getElementById("iconMoon")
   if (sun && moon) { sun.style.display = t === "light" ? "none" : "block"; moon.style.display = t === "light" ? "block" : "none" }
   // T43：思维导图的配色是 JS 按主题算成字面量写进 SVG 的（为了能导出图片），换主题后必须重绘一次，
@@ -4339,7 +4355,31 @@ function applyTheme(t) {
   render()
   slideAllSegs() // T86：主题分段滑块同步
 }
-applyTheme(localStorage.getItem("yyagent-theme") ?? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"))
+// T130：主题色预设——默认 graphite（白底黑字中性），翠绿为可选主题
+const ACCENTS = {
+  graphite: { dark: { accent: "#c8cdd3", user: "#d0d5da" }, light: { accent: "#1a1a1a", user: "#3a3a3a" } },
+  emerald:  { dark: { accent: "#3fb6a8", user: "#4fc26a" }, light: { accent: "#0f9488", user: "#2da44e" } },
+  azure:    { dark: { accent: "#6b9ff5", user: "#7bb8e8" }, light: { accent: "#2563eb", user: "#1d7ed8" } },
+  violet:   { dark: { accent: "#a78bfa", user: "#c084fc" }, light: { accent: "#7c3aed", user: "#9333ea" } },
+  amber:    { dark: { accent: "#f0b45c", user: "#f5c684" }, light: { accent: "#c47a08", user: "#b45309" } },
+}
+function applyAccent(name, mode) {
+  const preset = ACCENTS[name] ?? ACCENTS.graphite
+  const vars = mode === "light" ? preset.light : preset.dark
+  const root = document.documentElement.style
+  root.setProperty("--accent", vars.accent)
+  root.setProperty("--user", vars.user)
+}
+// T130：主题色选择器 UI 接线
+document.querySelectorAll(".acc-dot").forEach((btn) => btn.onclick = () => {
+  const name = btn.dataset.accent
+  localStorage.setItem("yyagent-accent", name)
+  applyAccent(name, document.documentElement.classList.contains("light") ? "light" : "dark")
+  document.querySelectorAll(".acc-dot").forEach((b) => b.classList.toggle("on", b === btn))
+  render() // 重绘以更新思维导图等按颜色计算的内容
+})
+document.querySelectorAll(".acc-dot").forEach((b) => b.classList.toggle("on", b.dataset.accent === (localStorage.getItem("yyagent-accent") ?? "graphite")))
+applyTheme(localStorage.getItem("yyagent-theme") ?? "light")
 $("themeBtn").onclick = () => applyTheme(document.documentElement.classList.contains("light") ? "dark" : "light")
 
 // ---- P1-1 定时任务列表 ----
