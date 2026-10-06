@@ -369,19 +369,19 @@ async function runConverge(
         if (d) {
           if (!inReason) {
             inReason = true
-            handlers.onText?.("\n<thinking>\n")
+            handlers.onText?.("<thinking>")
           }
           reasoningText += d
           handlers.onText?.(d)
         }
       } else if (inReason) {
         inReason = false
-        handlers.onText?.("\n</thinking>\n")
+        handlers.onText?.("</thinking>")
       }
     }
     if (inReason) {
       inReason = false
-      handlers.onText?.("\n</thinking>\n")
+      handlers.onText?.("</thinking>")
     }
   } catch (e) {
     if (opts.signal?.aborted) return { text: "", steps }

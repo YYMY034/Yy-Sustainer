@@ -433,7 +433,8 @@
   .amsg .abody .mindmap .mm-scroll, .msg .body .mindmap .mm-scroll { overflow-x: auto; overflow-y: hidden; }
   /* T63 思考过程折叠块：摘要行=思考末行（流式时随 delta 实时变），点击展开全文；流式/落库消息同款。
      .think-full 常驻 DOM（display 控制），展开状态由 window.__thinkOpen（内容前缀哈希）跨重绘记忆 */
-  .think-block { margin: 6px 0; border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); overflow: hidden; }
+  .think-block { margin: 3px 0; border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); overflow: hidden; }
+  .think-block + .think-block { margin-top: 2px; }
   .think-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; font-size: 12px; color: var(--dim); user-select: none; }
   .think-head:hover { color: var(--text); }
   .think-tag { flex-shrink: 0; font-size: 11px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 5px; padding: 0 6px; line-height: 16px; }
