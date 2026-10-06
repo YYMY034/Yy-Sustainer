@@ -59,7 +59,7 @@ ok('完成通知：≥30s 或长任务回合才提醒；出错也提醒',
   /if \(!timedOut && \(durTurn >= 30_000 \|\| meta\.longTask\)\)/.test(gateway) && /notifyDone\("Yy Sustainer · 任务出错"/.test(gateway))
 ok('定时任务完成走 notifyDone（toast + webhook）', /notifyDone\(`Yy Sustainer · \$\{t\.name\}`/.test(gateway))
 ok('notify 配置字段与路由', /notify\?: \{ toast\?: boolean; url\?: string;[\s\S]{0,200}?onlyFailure\?: boolean \}/.test(config) && gateway.includes('p === "/api/notify"'))
-ok('web：composerBar 长任务按钮 + 换会话同步', html.includes('id="longTaskBtn"') && /syncLongTask\(\) \/\/ T85/.test(script))
+ok('web：composerBar 长任务已内置（T131 工作流替代手动按钮）', !html.includes('id="longTaskBtn"'))
 
 console.log('=== 语法与配平 ===')
 try { writeFileSync('scripts/.t83-tmp.mjs', script + '\n'); execFileSync('node', ['--check', 'scripts/.t83-tmp.mjs']); unlinkSync('scripts/.t83-tmp.mjs'); ok('整段 <script> node --check 通过', true) }
@@ -70,7 +70,7 @@ ok('style 块去注释后括号配平', bo === bc, `${bo} vs ${bc}`)
 console.log('=== 活体检查（网关在跑时） ===')
 try {
   const served = await (await fetch('http://127.0.0.1:8642/', { signal: AbortSignal.timeout(4000) })).text()
-  ok('首页已含长任务按钮与备份卡', served.includes('id="longTaskBtn"') && served.includes('id="secData"'))
+  ok('首页已含备份卡（长任务按钮已内置删除）', !served.includes('id="longTaskBtn"') && served.includes('id="secData"'))
   const bk = await (await fetch('http://127.0.0.1:8642/api/backup', { signal: AbortSignal.timeout(4000) })).json()
   ok('GET /api/backup 返回配置/通知/列表', bk && typeof bk.config === "object" && typeof bk.notify === "object" && Array.isArray(bk.backups))
   const lt = await (await fetch('http://127.0.0.1:8642/api/longtask?sid=x', { signal: AbortSignal.timeout(4000) })).json()

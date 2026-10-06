@@ -378,8 +378,8 @@ test("前端真的去拉列表并接线（不是摆着看的）", () => {
   assert.match(web, /async function syncCheckpoints\(\) \{/)
   assert.match(web, /fetch\("\/api\/sessions\/checkpoints"\)/, "没拉 checkpoint 列表")
   assert.match(web, /fetch\("\/api\/sessions\/checkpoints\/resume"/, "没接恢复动作")
-  // 换会话要看、回合一结束也要看（这一轮被中断时横幅该出现）
-  assert.match(web, /syncLongTask\(\)[^\n]*\n\s*syncMcpState\(\)[^\n]*\n\s*syncCheckpoints\(\)/, "换会话时没同步 checkpoint（也别把 syncMcpState 插丢）")
+  // T130：syncLongTask 已删除（长任务内置于 T131 工作流，不再需要手动开关）
+  assert.match(web, /syncMcpState\(\)[^\n]*\n\s*syncCheckpoints\(\)/, "换会话时没同步 checkpoint（也别把 syncMcpState 插丢）")
   assert.match(web, /if \(!m\.busy && \(!sid \|\| sid === activeId\)\) syncCheckpoints\(\)/, "回合结束没重查 checkpoint")
   // discard 要二次确认（它会截掉会话历史）
   assert.match(web, /act === "discard" && !confirm\(/, "discard 没有二次确认")
