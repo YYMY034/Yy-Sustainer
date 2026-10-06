@@ -14,13 +14,20 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { homedir } from "node:os"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 const SRC = (p: string): string => readFileSync(join(process.cwd(), p), "utf8")
-import { todoPrompt } from "../src/agent/todo.js"
+// 隔离 HOME：todo.ts 的 TODO_DIR / LEGACY_FILE 在模块加载时用 homedir() 锁死，
+// 必须在 import 它之前把 HOME 指向临时目录，否则会读到这台机器真实的 ~/.yyagent/todo.json
+// （开发机上有遗留旧全局文件，「无清单返回空串」这条就在真实机器上必挂、干净机器上过——环境依赖 flaky）
+const FAKE_HOME = join(tmpdir(), `yyagent-test-todoprompt-${process.pid}`)
+mkdirSync(FAKE_HOME, { recursive: true })
+process.env.USERPROFILE = FAKE_HOME
+process.env.HOME = FAKE_HOME
+const { todoPrompt } = await import("../src/agent/todo.js")
 
-const DIR = join(homedir(), ".yyagent", "todo")
+const DIR = join(FAKE_HOME, ".yyagent", "todo")
 
 function writeTodo(sid: string, items: unknown): void {
   mkdirSync(DIR, { recursive: true })
@@ -93,5 +100,5 @@ test("网关与 TUI 用同一个函数（抄两份迟早漂）", () => {
 })
 
 process.on("exit", () => {
-  try { rmSync(DIR, { recursive: true, force: true }) } catch { /* 临时 */ }
+  try { rmSync(FAKE_HOME, { recursive: true, force: true }) } catch { /* 临时 */ }
 })

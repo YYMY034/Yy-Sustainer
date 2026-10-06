@@ -17,6 +17,18 @@
     --text: #24292f; --dim: #6a737d; --accent: #0f9488; --user: #2da44e;
     --warn: #bf8700; --err: #cf4632; --hover: #e4e9ee; --qbg: #fdf6e3; --shadow: rgba(140,150,160,.25); --dot-idle: #c4cad2;
   }
+  /* T130 主题色预设：CSS 类方案（html.accent-*），与 html.light 同机制保证生效。
+     深色档用亮变体（深底可读），html.light.accent-x 特异性更高自动覆盖为浅色档。 */
+  html.accent-graphite { --accent: #c8cdd3; --user: #d0d5da; }
+  html.light.accent-graphite { --accent: #1a1a1a; --user: #3a3a3a; }
+  html.accent-emerald { --accent: #3fb6a8; --user: #4fc26a; }
+  html.light.accent-emerald { --accent: #0f9488; --user: #2da44e; }
+  html.accent-azure { --accent: #6b9ff5; --user: #7bb8e8; }
+  html.light.accent-azure { --accent: #2563eb; --user: #1d7ed8; }
+  html.accent-violet { --accent: #a78bfa; --user: #c084fc; }
+  html.light.accent-violet { --accent: #7c3aed; --user: #9333ea; }
+  html.accent-amber { --accent: #f0b45c; --user: #f5c684; }
+  html.light.accent-amber { --accent: #c47a08; --user: #b45309; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   /* 界面字体可选：--app-font 由设置页写入（localStorage yyagent-font），默认 Segoe UI 系 */
   :root { --app-font: "Segoe UI", "Microsoft YaHei", sans-serif; }
@@ -3424,20 +3436,28 @@ function usageDonut(mu) {
     `<div class="ch-foot"><button class="ch-refresh" id="usageRefresh"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M13.2 8a5.2 5.2 0 11-1.5-3.7M13.4 1.8v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span>刷新</span></button></div>`
 }
 
+let usageErr = ""
 async function loadUsage() {
   if (!$("usageCharts")) return
-  const [d, m] = await Promise.all([
-    fetch("/api/usage/daily").then((r) => (r.ok ? r.json() : null)).catch(() => null),
-    fetch("/api/usage/models").then((r) => (r.ok ? r.json() : null)).catch(() => null),
-  ])
-  usageCache = { daily: d, models: m }
+  const grab = (u) => fetch(u).then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}${r.status === 404 ? " —— 当前网关是旧版本，请重启" : ""}`)
+    return r.json()
+  }).catch((e) => { throw new Error(`${u}: ${e.message}`) })
+  try {
+    const [d, m] = await Promise.all([grab("/api/usage/daily"), grab("/api/usage/models")])
+    usageCache = { daily: d, models: m }
+    usageErr = ""
+  } catch (e) {
+    usageErr = String(e.message || e)
+    console.warn("[usage] 拉取失败", usageErr)
+  }
   renderUsageCharts()
 }
 function renderUsageCharts() {
   const el = $("usageCharts")
   if (!el) return
   if (!usageCache?.daily?.byDate || !usageCache?.models) {
-    el.innerHTML = `<div class="ch-empty">用量明细接口还没有就绪 —— 重启网关后可用（/api/usage/daily、/api/usage/models）。</div>`
+    el.innerHTML = `<div class="ch-empty">用量明细暂不可用${usageErr ? ` —— ${usageErr}` : "，正在加载…"}</div>`
     return
   }
   // T86：两张用量图合并为一张 3D 翻转卡——正面 Token 活动热力图，背面每日模型累计用量环形图，
@@ -4364,7 +4384,7 @@ function applyTheme(t) {
   t = t === "light" ? "light" : "dark" // 防 localStorage 脏值（既非 light 也非 dark 时回退深色）
   document.documentElement.classList.toggle("light", t === "light")
   localStorage.setItem("yyagent-theme", t)
-  applyAccent(localStorage.getItem("yyagent-accent") ?? "graphite", t)
+  applyAccent(localStorage.getItem("yyagent-accent") ?? "graphite")
   const sun = document.getElementById("iconSun"), moon = document.getElementById("iconMoon")
   if (sun && moon) { sun.style.display = t === "light" ? "none" : "block"; moon.style.display = t === "light" ? "block" : "none" }
   // T43：思维导图的配色是 JS 按主题算成字面量写进 SVG 的（为了能导出图片），换主题后必须重绘一次，
@@ -4380,32 +4400,26 @@ const ACCENTS = {
   violet:   { dark: { accent: "#a78bfa", user: "#c084fc" }, light: { accent: "#7c3aed", user: "#9333ea" } },
   amber:    { dark: { accent: "#f0b45c", user: "#f5c684" }, light: { accent: "#c47a08", user: "#b45309" } },
 }
-function applyAccent(name, mode) {
+const ACCENT_NAMES = Object.keys(ACCENTS)
+function applyAccent(name) {
   const preset = ACCENTS[name] ?? ACCENTS.graphite
-  const vars = mode === "light" ? preset.light : preset.dark
-  // T130 修正：style.setProperty 在部分浏览器下不覆盖 CSS 类定义的变量——改用 <style> 注入
-  // （追加在 cascade 末尾 = 同 specificity 下后写的赢）。同时覆盖 :root 和 html.light 两种定义方式。
-  let styleEl = document.getElementById("accentOverride")
-  if (!styleEl) {
-    styleEl = document.createElement("style")
-    styleEl.id = "accentOverride"
-    document.head.appendChild(styleEl)
-  }
-  styleEl.textContent = `:root, html, html.light { --accent: ${vars.accent}; --user: ${vars.user}; }`
-  // 重渲染所有依赖颜色的内容（消息区 + 图表 + 思维导图等 JS 计算色）
-  render()
-  renderUsageCharts()
-  slideAllSegs()
+  // T130 修正二：style.setProperty 与 <style> 注入在本页都不可靠（被类定义/缓存压住）——
+  // 改成 html.accent-* 类切换（与 html.light 同机制，CSS 里同名规则已定义，保证生效）。
+  const cl = document.documentElement.classList
+  ACCENT_NAMES.forEach((n) => cl.remove("accent-" + n))
+  cl.add("accent-" + (ACCENTS[name] ? name : "graphite"))
+  // 重渲染所有依赖颜色的内容——各自独立 try-catch：一处抛错不能连累其余重绘与调用方后续逻辑
+  for (const fn of [render, renderUsageCharts, slideAllSegs]) { try { fn() } catch (e) { console.warn("[accent] 重绘失败", fn.name, e) } }
 }
-// T130：主题色选择器 UI 接线
+// T130：主题色选择器 UI 接线——先切视觉态与本地存储，再应用颜色（applyAccent 内部已隔离异常）
 document.querySelectorAll(".acc-dot").forEach((btn) => btn.onclick = () => {
   const name = btn.dataset.accent
+  if (!ACCENTS[name]) return
   localStorage.setItem("yyagent-accent", name)
-  applyAccent(name, document.documentElement.classList.contains("light") ? "light" : "dark")
   document.querySelectorAll(".acc-dot").forEach((b) => b.classList.toggle("on", b === btn))
-  render() // 重绘以更新思维导图等按颜色计算的内容
+  applyAccent(name)
 })
-document.querySelectorAll(".acc-dot").forEach((b) => b.classList.toggle("on", b.dataset.accent === (localStorage.getItem("yyagent-accent") ?? "graphite")))
+document.querySelectorAll(".acc-dot").forEach((b) => b.classList.toggle("on", b.dataset.accent === (ACCENTS[localStorage.getItem("yyagent-accent")] ? localStorage.getItem("yyagent-accent") : "graphite")))
 applyTheme(localStorage.getItem("yyagent-theme") ?? "light")
 $("themeBtn").onclick = () => applyTheme(document.documentElement.classList.contains("light") ? "dark" : "light")
 
