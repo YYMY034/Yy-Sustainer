@@ -4366,9 +4366,19 @@ const ACCENTS = {
 function applyAccent(name, mode) {
   const preset = ACCENTS[name] ?? ACCENTS.graphite
   const vars = mode === "light" ? preset.light : preset.dark
-  const root = document.documentElement.style
-  root.setProperty("--accent", vars.accent)
-  root.setProperty("--user", vars.user)
+  // T130 修正：style.setProperty 在部分浏览器下不覆盖 CSS 类定义的变量——改用 <style> 注入
+  // （追加在 cascade 末尾 = 同 specificity 下后写的赢）。同时覆盖 :root 和 html.light 两种定义方式。
+  let styleEl = document.getElementById("accentOverride")
+  if (!styleEl) {
+    styleEl = document.createElement("style")
+    styleEl.id = "accentOverride"
+    document.head.appendChild(styleEl)
+  }
+  styleEl.textContent = `:root, html, html.light { --accent: ${vars.accent}; --user: ${vars.user}; }`
+  // 重渲染所有依赖颜色的内容（消息区 + 图表 + 思维导图等 JS 计算色）
+  render()
+  renderUsageCharts()
+  slideAllSegs()
 }
 // T130：主题色选择器 UI 接线
 document.querySelectorAll(".acc-dot").forEach((btn) => btn.onclick = () => {
