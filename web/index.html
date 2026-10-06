@@ -4502,7 +4502,22 @@ function renderAiNews(items) {
   const box = $("aiNewsList")
   if (!box) return
   if (!items.length) { box.innerHTML = `<div class="dim" style="font-size:12px;">暂无数据——每天 08:00 自动采集，或点上方按钮立即搜索</div>`; return }
-  box.innerHTML = items.map((n) => `<div class="tk" style="margin-bottom:6px;"><div class="tn"><span>${esc(n.title || "")}</span><span class="tcron">${esc(String(n.ts || "").slice(0, 10))}</span></div><div class="tprompt">${esc(n.summary || "")}</div>${n.source ? `<div class="tlast"><a href="${esc(n.source)}" target="_blank" rel="noopener" style="color:var(--accent);font-size:11px;">${esc(n.source)}</a></div>` : ""}</div>`).join("")
+  box.innerHTML = items.map((n, i) => `<div class="tk" style="margin-bottom:6px;cursor:pointer;" data-idx="${i}"><div class="tn"><span>${esc(n.title || "")}</span><span class="tcron">${esc(String(n.ts || "").slice(0, 10))}</span></div><div class="tprompt">${esc(n.summary || "")}</div>${n.source ? `<div class="tlast" style="color:var(--accent);font-size:11px;">${esc(n.source)}</div>` : ""}</div>`).join("")
+  box.querySelectorAll(".tk[data-idx]").forEach((el) => el.onclick = async () => {
+    const item = items[Number(el.dataset.idx)]
+    if (!item) return
+    showPage(null) // 回到主界面
+    // 新建会话并让 agent 解读这条新闻
+    try {
+      const sid = ((await (await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) })).json())).id
+      await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sid, text: `请帮我深入解读这条 AI 新闻：
+标题：${item.title}
+摘要：${item.summary || "（无摘要）"}
+来源：${item.source || "未知"}
+
+请分析：① 这条新闻的背景和上下文 ② 对行业的影响 ③ 值得关注的后续发展。用中文回复。` }) })
+    } catch (e) { $("status").textContent = `创建解读会话失败：${e.message}` }
+  })
 }
 $("aiNewsBtn").onclick = async () => {
   $("aiNewsBtn").textContent = "搜索中…"
