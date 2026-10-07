@@ -90,11 +90,15 @@ test("loadSession 对结构异常的 JSON 也返回 undefined", () => {
   assert.equal(loadSession(meta.id), undefined)
 })
 
-test("index 坏掉时 listSessions 退化为空列表（不抛）", () => {
+test("index 坏掉时 listSessions 从磁盘自愈（T140：不抛、不丢会话）", () => {
   reset()
-  createSession("C:\\proj")
+  const meta = createSession("C:\\proj")
   writeFileSync(INDEX, "{{{")
-  assert.deepEqual(listSessions(), [])
+  // 对账自愈：index 被外部进程写坏/覆盖时，磁盘上的会话文件是真相——补回而非清空
+  const list = listSessions()
+  assert.ok(Array.isArray(list))
+  assert.equal(list.length, 1)
+  assert.equal(list[0].id, meta.id)
 })
 
 test("写盘不留 .tmp 残留", () => {

@@ -176,9 +176,35 @@ export function createSession(cwd: string, model?: string, title = "新对话"):
 }
 
 export function listSessions(): SessionMeta[] {
+  ensure()
   // T32：归一化 cwd——存量数据里同一路径有多种斜杠写法（C:\... / C://... / C:////...），
   // 前端按 cwd 字符串分组会裂成多个组。读出口统一压成规范形式（C:\Users\...），写入端不动。
-  return readIndex().map((s) => (s.cwd ? { ...s, cwd: normalize(s.cwd) } : s))
+  // T140 对账自愈：外部进程（并行测试工具/误操作）可能覆盖 index 或删掉其中条目——
+  // 磁盘上的 <id>.json 才是真相。读列表时扫目录，把 index 丢失的孤儿补回并写回。
+  // 正常情况（无孤儿）只有一次 readdir 的开销，零文件读。
+  let list = readIndex()
+  try {
+    const known = new Set(list.map((s) => s.id))
+    const orphans: SessionMeta[] = []
+    for (const f of readdirSync(ROOT)) {
+      if (!f.endsWith(".json") || f === "index.json") continue
+      const id = f.slice(0, -5)
+      if (known.has(id)) continue
+      const t = tombstones.get(id)
+      if (t != null && Date.now() - t < 30 * 60000) continue // 刚删除的不救回
+      try {
+        const j = JSON.parse(readFileSync(join(ROOT, f), "utf8")) as SessionFile
+        if (j?.meta?.id && Array.isArray(j.messages)) orphans.push(j.meta)
+      } catch { /* 坏文件跳过 */ }
+    }
+    if (orphans.length) {
+      orphans.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      list = [...orphans, ...list]
+      writeIndex(list)
+      console.log(`[会话] 对账自愈：补回 ${orphans.length} 个被从 index 丢掉的会话（${orphans.map((o) => o.id).join(",")}）`)
+    }
+  } catch { /* 目录扫描失败不影响列表返回 */ }
+  return list.map((s) => (s.cwd ? { ...s, cwd: normalize(s.cwd) } : s))
 }
 
 export function loadSession(id: string): SessionFile | undefined {
