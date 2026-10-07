@@ -2883,6 +2883,13 @@ export function startGateway(port = PORT): void {
   }, 300)
 
   // T92：默认只听本机；要局域网分享成果链接就把 config.lanShare 设成 true（或 YYAGENT_HOST=0.0.0.0）
+  // T138：listen 失败必须明确退出——否则端口被占（已开着一个网关又手动起一个）时 EADDRINUSE
+  // 会被下面的全局 uncaughtException 兜底吞掉，进程活着但无端口，scheduler 却照常跑
+  // （定时任务继续触发、会话继续写盘）——用户删掉的会话会被这种僵尸悄悄写回。
+  server.on("error", (e) => {
+    console.error(`[yyagent-gateway] 监听失败：${(e as Error).message}——大概率端口已被占用（已有网关在跑）。退出。`)
+    process.exit(1)
+  })
   server.listen(port, HOST, () => {
     console.log(
       LAN_SHARE
