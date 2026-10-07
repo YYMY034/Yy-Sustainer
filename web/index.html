@@ -648,9 +648,11 @@
   .sub-lane .sl-p { color: var(--text); font-weight: 600; }
   .act-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); padding: 3px 6px; border-radius: 6px; cursor: pointer; user-select: none; }
   .act-line:hover { background: var(--panel); color: var(--text); }
+  .act-line .aico { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--dim); }
+  .act-line .aico svg { width: 14px; height: 14px; }
+  .act-line.pending .aico { color: var(--accent); }
   .act-line .spinner { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
   .act-line.done .spinner { display: none; }
-  .act-line.done::before { content: "◎"; color: var(--dim); width: 12px; text-align: center; flex-shrink: 0; font-size: 11px; }
   .act-line .nm { color: var(--accent); flex-shrink: 0; }
   .act-line .arg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
   .act-line .ms { margin-left: auto; flex-shrink: 0; font-size: 11px; opacity: .7; }
@@ -3721,10 +3723,52 @@ $("todoHead").onclick = () => {
 // ---- P0-4 活动流（streaming 块内逐行状态，点击展开可滚动卡片） ----
 // 行结构：{toolCallId, name, argsSummary, input, output, pending, t0, ms}
 // T15 行文案对齐参考图：「已搜索/已读取/已修改 + 参数摘要」；进行中 = 图标 + 原形动词
-const ACT_CHIP = { bash: "已执行", read: "已读取", write: "已写入", edit: "已修改", glob: "已搜索", grep: "已搜索", webfetch: "已抓取", websearch: "已搜索", memory_save: "已记忆", memory_search: "已检索", todo_write: "更新计划", ask: "已提问", delegate: "已派发", db_save: "已入库", db_query: "已检索", xlsx_read: "已读取", xlsx_write: "已生成", docx_write: "已生成", imggen: "已生图", videogen: "已生成", computer: "已操控" }
+const ACT_CHIP = { thinking: "思考", bash: "已执行", read: "已读取", write: "已写入", edit: "已修改", glob: "已搜索", grep: "已搜索", webfetch: "已抓取", websearch: "已搜索", memory_save: "已记忆", memory_search: "已检索", todo_write: "更新计划", ask: "已提问", delegate: "已派发", db_save: "已入库", db_query: "已检索", xlsx_read: "已读取", xlsx_write: "已生成", docx_write: "已生成", imggen: "已生图", videogen: "已生成", computer: "已操控" }
 function actChip(name, pending) {
   if (pending) return cnTool(name) // 进行中显示「读取文件」「代码搜索」原形
   return ACT_CHIP[name] ?? `已${cnTool(name)}`
+}
+// T134 活动行图标：16×16 stroke=currentColor 1.3（同导航 SVG 风格，不用 emoji）。
+// 同类工具共用一个图标（search/edit/term/globe/brain/db/...），未知工具兜底方块。
+const _AIC = (d, extra = "") => `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3">${d}${extra}</svg>`
+const ACT_ICON_SET = {
+  search: '<circle cx="7" cy="7" r="4.5"/><path d="M10.4 10.4L14 14" stroke-linecap="round"/>',
+  edit: '<path d="M10.8 2.9l2.3 2.3L6 12.3l-3 .7.7-3 7.1-7.1z" stroke-linejoin="round"/>',
+  term: '<rect x="1.8" y="2.6" width="12.4" height="10.8" rx="2"/><path d="M4.6 6.2l1.8 1.8-1.8 1.8M8.4 10h3" stroke-linecap="round" stroke-linejoin="round"/>',
+  globe: '<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c1.8 1.5 1.8 9.5 0 11M8 2.5c-1.8 1.5-1.8 9.5 0 11"/>',
+  brain: '<path d="M7.3 3a2.3 2.3 0 0 0-4.5.7A2.4 2.4 0 0 0 2.5 7.8a2.6 2.6 0 0 0 2 2.6c.2 1.1 1 1.9 2.1 1.9h.7V3z" stroke-linejoin="round"/><path d="M8.7 3a2.3 2.3 0 0 1 4.5.7 2.4 2.4 0 0 1 .3 4.1 2.6 2.6 0 0 1-2 2.6c-.2 1.1-1 1.9-2.1 1.9h-.7V3z" stroke-linejoin="round"/>',
+  bookmark: '<path d="M4.5 2.5h7v11l-3.5-2.6-3.5 2.6v-11z" stroke-linejoin="round"/>',
+  list: '<path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8"/><path d="M2.5 4.5h.01M2.5 8h.01M2.5 11.5h.01" stroke-linecap="round" stroke-width="1.8"/>',
+  chat: '<path d="M2.5 3.5h11v7h-6l-3 2.8v-2.8h-2v-7z" stroke-linejoin="round"/>',
+  branch: '<circle cx="4" cy="8" r="1.6"/><circle cx="12" cy="3.8" r="1.6"/><circle cx="12" cy="12.2" r="1.6"/><path d="M5.4 7.2l5-2.4M5.4 8.8l5 2.4"/>',
+  db: '<ellipse cx="8" cy="3.5" rx="5.5" ry="2"/><path d="M2.5 3.5v9c0 1.1 2.46 2 5.5 2s5.5-.9 5.5-2v-9"/>',
+  table: '<rect x="1.8" y="2.6" width="12.4" height="10.8" rx="1.8"/><path d="M1.8 6.4h12.4M6.4 6.4v7M10.6 6.4v7"/>',
+  doc: '<path d="M4 1.8h5.5l3 3V14.2H4V1.8z" stroke-linejoin="round"/><path d="M6.5 6h3M6.5 8.5h3M6.5 11h3" stroke-linecap="round"/>',
+  img: '<rect x="1.8" y="2.6" width="12.4" height="10.8" rx="2"/><circle cx="5.6" cy="6.4" r="1.2"/><path d="M2.6 11.6l3.4-3.2 2.4 2.2 2.2-2 3 2.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  monitor: '<rect x="2" y="3" width="12" height="8.5" rx="1.5"/><path d="M6 14h4M8 11.5V14" stroke-linecap="round"/>',
+  box: '<rect x="3" y="3" width="10" height="10" rx="2"/>',
+}
+const ACT_ICON = {
+  thinking: "brain",
+  read: "search", glob: "search", grep: "search", websearch: "search", memory_search: "search", db_query: "search",
+  edit: "edit",
+  write: "doc", docx_write: "doc",
+  bash: "term",
+  webfetch: "globe",
+  memory_save: "bookmark",
+  todo_write: "list",
+  ask: "chat",
+  delegate: "branch",
+  db_save: "db",
+  xlsx_read: "table", xlsx_write: "table",
+  imggen: "img", videogen: "img",
+  computer: "monitor",
+}
+function actIcon(name) { return _AIC(ACT_ICON_SET[ACT_ICON[name] ?? "box"]) }
+// 时长格式：1s 内显 ms，10s 内一位小数，再往上整秒（对照「持续了 4 秒」的信息密度）
+function fmtDur(ms) {
+  if (ms == null) return ""
+  return ms >= 10000 ? `${Math.round(ms / 1000)}s` : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 }
 function cleanStepArg(arg) {
   return String(arg || "").replace(/file_path=|command=|pattern=|query=|path=/g, "").trim()
@@ -3735,10 +3779,13 @@ function renderActivity() {
   const steps = window.__steps ?? []
   box.innerHTML = steps.map((s, i) => {
     const arg = cleanStepArg(s.argsSummary || s.argText || "")
-    const ms = s.ms != null ? `${s.ms}ms` : ""
+    const ms = fmtDur(s.ms)
     const expanded = window.__actOpen === i
-    let html = `<div class="act-line ${s.pending ? "" : "done"}" data-i="${i}">` +
-      `<span class="spinner"></span><span class="nm">${esc(actChip(s.name, s.pending))}</span>` +
+    // T134：行首专属图标（思考=大脑/读取=放大镜/编辑=铅笔…），pending 时图标后跟 spinner
+    let html = `<div class="act-line ${s.pending ? "pending" : "done"}" data-i="${i}">` +
+      `<span class="aico">${actIcon(s.name)}</span>` +
+      (s.pending ? `<span class="spinner"></span>` : "") +
+      `<span class="nm">${esc(actChip(s.name, s.pending))}</span>` +
       (arg ? `<span class="arg">${esc(arg)}</span>` : "") +
       (ms ? `<span class="ms">${ms}</span>` : "") +
       `</div>`
@@ -3761,16 +3808,27 @@ function renderActivity() {
   if (nearBottom()) { const mb = $("messages"); mb.scrollTop = mb.scrollHeight }
 }
 
-const TOOL_CN_WEB = { bash: "终端", read: "读取文件", write: "写入文件", edit: "编辑文件", glob: "查找文件", grep: "代码搜索", webfetch: "抓取网页", websearch: "网页搜索", bg_read: "后台任务", memory_save: "记忆保存", memory_search: "记忆检索", memory_read: "记忆读取", todo_write: "更新计划", ask: "提问", delegate: "派发子任务", db_save: "数据库写入", db_query: "数据库检索", xlsx_read: "读取表格", xlsx_write: "生成表格", docx_write: "生成文档", imggen: "生成图像", videogen: "生成视频", computer: "操控电脑", task_list: "查看定时任务", task_create: "创建定时任务", task_delete: "删除定时任务", task_toggle: "启停定时任务" }
+const TOOL_CN_WEB = { thinking: "思考", bash: "终端", read: "读取文件", write: "写入文件", edit: "编辑文件", glob: "查找文件", grep: "代码搜索", webfetch: "抓取网页", websearch: "网页搜索", bg_read: "后台任务", memory_save: "记忆保存", memory_search: "记忆检索", memory_read: "记忆读取", todo_write: "更新计划", ask: "提问", delegate: "派发子任务", db_save: "数据库写入", db_query: "数据库检索", xlsx_read: "读取表格", xlsx_write: "生成表格", docx_write: "生成文档", imggen: "生成图像", videogen: "生成视频", computer: "操控电脑", task_list: "查看定时任务", task_create: "创建定时任务", task_delete: "删除定时任务", task_toggle: "启停定时任务" }
 function cnTool(name) {
   if (TOOL_CN_WEB[name]) return TOOL_CN_WEB[name]
   if (name?.startsWith("mcp_")) return `MCP·${name.split("_")[1] ?? ""}`
   return name ?? "工具"
 }
 
-// 工具事件入库（call/result 共用）；input 摘要只算一次
-function upsertStep(m, kind) {
+// T134 思考活动行入库：on=true 开一段新思考（pending 转圈），on=false 把 pending 的定格时长。
+// 一个回合可能思考→工具→思考交替，所以按「最后一个 pending 的 thinking」匹配，无则新建。
+function upsertThink(on) {
   const steps = window.__steps ?? (window.__steps = [])
+  const pend = steps.find((x) => x.name === "thinking" && x.pending)
+  if (on) {
+    if (pend) return // 重复的 on 事件（理论不发生）忽略
+    steps.push({ toolCallId: "think-" + Date.now(), name: "thinking", argsSummary: "", pending: true, t0: Date.now(), ms: null })
+  } else {
+    if (pend) { pend.pending = false; pend.ms = Date.now() - pend.t0 }
+  }
+}
+// 工具事件入库（call/result 共用）；input 摘要只算一次
+function upsertStep(m, kind) {  const steps = window.__steps ?? (window.__steps = [])
   let s = steps.find((x) => x.toolCallId === m.toolCallId)
   if (!s) {
     s = { toolCallId: m.toolCallId, name: m.name, argsSummary: "", input: undefined, output: undefined, pending: true, t0: Date.now(), ms: null }
@@ -3831,6 +3889,13 @@ function connect() {
       ensureStream()
       $("thinkSpin")?.remove()
       upsertStep(m, m.kind === "call" ? "call" : "result")
+      renderActivity()
+    }
+    else if (m.type === "think") {
+      // T134：思考活动行——后端流里 <thinking> 开/关时广播；开=pending 行实时转，关=定格时长
+      if (m.sessionId && m.sessionId !== activeId) return
+      ensureStream()
+      upsertThink(m.on)
       renderActivity()
     }
     else if (m.type === "question") { question = m.sessionId && m.sessionId !== activeId ? null : m.q; render() }

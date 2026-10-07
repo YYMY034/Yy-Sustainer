@@ -464,6 +464,7 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
   const steps: Array<{ name: string; argsSummary: string; input?: string; output?: string }> = []
   // 停止后可见：累积流式已吐出的正文——abort 时 result.text 拿不到（Promise 被 reject），只能自己攒
   let streamedText = ""
+  let thinkOn = false // T134：当前是否在思考流里（think 事件只翻转变过时才广播）
   // T93 P1 轮内 checkpoint：原来一个回合只在开头和结尾落库，中途被进程杀掉
   // 就只剩一条用户消息、什么都找不回来。现在每 20 秒或每 5 步把一个 checkpoint 写到
   // 独立目录（含已流出正文、工具步骤、本轮压缩结果）。**起始就写一次**，
@@ -563,6 +564,15 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
             onText: (d) => {
               streamedText += d
               broadcast({ type: "text", sessionId, delta: d })
+              // T134：思考活动事件——流文本里 <thinking> 开/关 → 广播 think on/off（前端活动行「思考」，
+              // 对齐参考 UI 的「🧠 思考 · 持续了 N 秒」行）。标签可能被 delta 切开：只在 delta 含 < 时
+              // 重扫累积文本数开闭标签（开>闭=在思考），凑齐那一刻才翻状态。
+              if (d.includes("<")) {
+                const opens = (streamedText.match(/<thinking>/g) ?? []).length
+                const closes = (streamedText.match(/<\/thinking>/g) ?? []).length
+                const inThink = opens > closes
+                if (inThink !== thinkOn) { thinkOn = inThink; broadcast({ type: "think", sessionId, on: inThink }) }
+              }
             },
             onStatus: (s) => broadcast({ type: "status", sessionId, text: s }),
             // T93 P2：接上每步回调——loop 一直在报，但从来没人接，所以界面上没有「第 N/M 步」。

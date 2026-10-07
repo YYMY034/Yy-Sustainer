@@ -90,6 +90,38 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 400))
     push("▶ 不触发页面跳转", !$("#autoPage").classList.contains("show"))
     push("▶ 触发运行提示", $("#status").textContent.includes("demo-probe"), $("#status").textContent)
+    // 8 T134：思考活动行 + 工具图标——pending 行（brain 图标+spinner）→ off 定格时长
+    ensureStream()
+    upsertThink(true)
+    renderActivity()
+    let line = document.querySelector("#activity .act-line.pending")
+    push("思考 on → pending 活动行", !!line, line ? line.className : "null")
+    push("思考行有 brain 图标", !!line?.querySelector(".aico svg"), line ? line.querySelector(".aico").innerHTML.slice(0, 40) : "")
+    push("思考行文案=思考", line?.querySelector(".nm")?.textContent === "思考", line?.querySelector(".nm")?.textContent)
+    push("pending 行有 spinner", !!line?.querySelector(".spinner"))
+    await new Promise((r) => setTimeout(r, 30)) // 让思考行有真实时长
+    upsertThink(false)
+    renderActivity()
+    line = document.querySelector("#activity .act-line.done")
+    push("思考 off → done + 时长", !!line && /^\d+(\.\d+)?(ms|s)$/.test(line.querySelector(".ms")?.textContent ?? ""), line?.querySelector(".ms")?.textContent)
+    // 工具行图标映射抽查（read → 放大镜）
+    upsertStep({ toolCallId: "t1", name: "read", kind: "call", input: { file_path: "a.ts" } }, "call")
+    upsertStep({ toolCallId: "t1", kind: "result", output: "ok" }, "result")
+    renderActivity()
+    const readLine = [...document.querySelectorAll("#activity .act-line.done")].find((l) => l.querySelector(".nm")?.textContent === "已读取")
+    push("读取行=放大镜图标", !!readLine?.querySelector(".aico svg"))
+    push("时长格式化", fmtDur(4200) === "4.2s" && fmtDur(420) === "420ms" && fmtDur(42000) === "42s", `${fmtDur(4200)}/${fmtDur(420)}/${fmtDur(42000)}`)
+    // WS 接线：模拟后端广播 {type:"think"} 走真实 onmessage 分支（sessionId 用当前会话）
+    window.__steps = []
+    const fakeMsg = (obj) => ws.onmessage({ data: JSON.stringify(obj) })
+    fakeMsg({ type: "think", sessionId: activeId, on: true })
+    push("ws think on → 活动行", !!document.querySelector("#activity .act-line.pending"))
+    fakeMsg({ type: "think", sessionId: activeId, on: false })
+    push("ws think off → 定格", !!document.querySelector("#activity .act-line.done"))
+    // 别的会话的 think 事件不应渲染到当前活动流
+    window.__steps = []
+    fakeMsg({ type: "think", sessionId: "other-session", on: true })
+    push("异会话 think 不串场", !document.querySelector("#activity .act-line.pending"))
     return JSON.stringify(out)
   }
   const script = `(async () => { try { return await (${assertFn.toString()})() } catch (e) { return JSON.stringify([["脚本异常", false, e && e.stack ? String(e.stack).split("\\n").slice(0, 4).join(" | ") : String(e)]]) } })()`
