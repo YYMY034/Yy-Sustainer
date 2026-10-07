@@ -134,6 +134,41 @@ app.whenReady().then(async () => {
     push("无 cwd 时相对路径原样返回", (sessions.find((s) => s.id === activeId).cwd = "", absPathFor("b.html") === "b.html"))
     sessions.pop()
     activeId = null
+    // 10 T136：提问卡片——入消息流、白底、倒计时、超时自动按推荐回答
+    sessions.push({ id: "probe-sess-q", cwd: "C:\\proj\\q" })
+    activeId = "probe-sess-q"
+    messages.length = 0
+    messages.push({ ts: 1, role: "user", content: "hi" }) // 有消息才走消息流分支（空会话没有提问场景）
+    question = { question: "选哪条路径？", options: ["甲方案", "乙方案"], defaultOption: "乙方案" }
+    render()
+    const mb = $("#messages")
+    const card = $("#qcard")
+    push("提问卡渲染进消息流", !!card && !!card.closest("#messages"))
+    push("卡片白底样式", card && getComputedStyle(card).backgroundColor !== "transparent", card ? getComputedStyle(card).backgroundColor : "")
+    push("推荐徽标在乙方案", [...card.querySelectorAll(".qdef")].length === 1 && card.querySelectorAll(".qopts button")[1]?.textContent.includes("乙方案"))
+    push("倒计时文本出现", /\d+s 后自动按推荐回答/.test($("#qTimer")?.textContent ?? ""), $("#qTimer")?.textContent)
+    push("超时上限 60s", Q_LIMIT_MS === 60000)
+    // 超时：拨 deadline 到过去 → qTick 自动 answer（stub ws.send 收集）
+    const sent = []
+    const realSend = ws.send
+    ws.send = (d) => sent.push(JSON.parse(d))
+    qSeen = question
+    qDeadline = Date.now() - 1
+    qTick()
+    push("超时自动按推荐提交", sent.length === 1 && sent[0].type === "answer" && sent[0].answer === "乙方案", JSON.stringify(sent[0]))
+    push("提交后问题清空", question === null)
+    // 手动点击选项也要能发
+    question = { question: "再选一次", options: ["A", "B"], defaultOption: "A" }
+    render()
+    ws.send = (d) => sent.push(JSON.parse(d))
+    $("#qcard").querySelectorAll(".qopts button")[1].click()
+    push("点击选项提交", sent.length === 2 && sent[1].answer === "B", JSON.stringify(sent[1]))
+    question = null
+    messages.length = 0
+    sessions.pop()
+    activeId = null
+    render()
+    ws.send = realSend
     return JSON.stringify(out)
   }
   const script = `(async () => { try { return await (${assertFn.toString()})() } catch (e) { return JSON.stringify([["脚本异常", false, e && e.stack ? String(e.stack).split("\\n").slice(0, 4).join(" | ") : String(e)]]) } })()`

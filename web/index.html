@@ -695,15 +695,20 @@
   /* 权限问题卡 */
   /* T46：提问框不再铺满整个窗口宽度（用户反馈太宽）—— 与消息气泡同一 860px 标准位居中；
      width 给个 100%-44px 兜底窄窗口，两侧留 22px 呼吸边 */
-  #question { display: none; width: calc(100% - 44px); max-width: 860px; margin: 0 auto 10px; border: 1px solid var(--warn); border-radius: 8px; padding: 12px 14px; background: var(--qbg); }
-  #question.show { display: block; }
-  #question .q { color: var(--warn); font-weight: 600; margin-bottom: 8px; white-space: pre-wrap; }
-  #question .opts button { display: block; width: 100%; text-align: left; margin: 4px 0; padding: 7px 10px; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
-  #question .opts button:hover { border-color: var(--warn); }
-  #question .opts button .star { color: var(--warn); }
-  #question .free { display: flex; gap: 8px; margin-top: 8px; }
-  #question .free input { flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 6px 10px; }
-  #question .free button { background: var(--text); border: none; border-radius: 6px; color: var(--bg); padding: 6px 14px; cursor: pointer; }
+  /* T136 提问卡片：在输出区（消息流尾部）的白底卡片，样式对齐消息气泡；warn 色只做点缀 */
+  .qcard { background: var(--panel); border: 1px solid var(--warn); border-radius: 12px; padding: 12px 14px; margin: 6px auto 12px; max-width: 860px; width: calc(100% - 44px); box-shadow: 0 2px 10px var(--shadow); }
+  .qcard .qhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .qcard .qtag { color: var(--warn); font-weight: 600; font-size: 12px; }
+  .qcard .qtimer { color: var(--dim); font-size: 11px; }
+  .qcard .qtimer.urgent { color: var(--warn); font-weight: 600; }
+  .qcard .qtext { color: var(--text); font-weight: 600; font-size: 13px; line-height: 1.6; margin-bottom: 8px; white-space: pre-wrap; }
+  .qcard .qopts button { display: block; width: 100%; text-align: left; margin: 5px 0; padding: 8px 11px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font: inherit; font-size: 12.5px; line-height: 1.5; transition: border-color .13s ease, background .13s ease; }
+  .qcard .qopts button:hover { border-color: var(--warn); background: var(--qbg); }
+  .qcard .qdef { color: var(--warn); font-size: 11px; border: 1px solid var(--warn); border-radius: 4px; padding: 0 5px; margin-left: 6px; }
+  .qcard .qfree { display: flex; gap: 8px; margin-top: 9px; }
+  .qcard .qfree input { flex: 1; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 7px 11px; font: inherit; font-size: 12.5px; }
+  .qcard .qfree input:focus { outline: none; border-color: var(--warn); }
+  .qcard .qfree button { background: var(--text); border: none; border-radius: 8px; color: var(--bg); padding: 7px 15px; cursor: pointer; font: inherit; }
 
   /* T23 输入区：取消白色背景，与 #messages 同底色（panel2）+ 同侧边距（10px），上下连成一个大圆角矩形；输入框/上下文行直接悬浮其上 */
   #inputArea { background: var(--panel); padding: 6px 28px 8px; margin: 0 10px; border-radius: 0 0 14px 14px; }
@@ -1118,11 +1123,7 @@
       <div id="todoProg"><div id="todoFill"></div></div>
       <div id="todoItems"></div>
     </div>
-    <div id="question">
-      <div class="q"></div>
-      <div class="opts"></div>
-      <div class="free"><input id="freeInput" placeholder="或输入自定义回答…"><button id="btnFree">回答</button></div>
-    </div>
+    <!-- T136 提问卡片移入消息流尾部渲染（render() 里 qcardHtml()），独立元素已删 -->
     <div id="banner"></div>
     <!-- T93 P2 断点恢复：上次进程被中断、本会话还有未完成回合时显示，三个动作对应后端 resume -->
     <div id="cpBar"><span class="cpText"></span><button class="primary" data-act="adopt">采纳已产出</button><button data-act="retry">重新发起</button><button data-act="discard">丢弃</button></div>
@@ -2792,8 +2793,10 @@ function render() {
       return `${divider}<div class="msg assistant${arch}" id="msg${i}"><div class="who">${who}</div>${assistBody}${steps}${msgActs}</div>${turnSep}`
     }).join("")
     box.innerHTML = olderBtn + body +
-    (streamingOn ? `<div class="msg assistant" id="streaming"><div class="who">${esc(modelShort(activeSessionModel()))}</div>${streamStatusText ? `<div class="stream-status" id="streamStatus"><span id="streamStatusText" class="shimmer-text">${esc(streamStatusText)}</span></div>` : ""}<div id="subLanes"></div><div id="activity"></div><div class="body" id="streamBody"></div></div>` : "")
+    (streamingOn ? `<div class="msg assistant" id="streaming"><div class="who">${esc(modelShort(activeSessionModel()))}</div>${streamStatusText ? `<div class="stream-status" id="streamStatus"><span id="streamStatusText" class="shimmer-text">${esc(streamStatusText)}</span></div>` : ""}<div id="subLanes"></div><div id="activity"></div><div class="body" id="streamBody"></div></div>` : "") +
+    qcardHtml() // T136：提问卡片在输出区（消息流尾部），白底卡片 + 倒计时自动按推荐回答
     hardenSvgBoxes(box) // 10.34 第二道闸：.svgbox 内容写入后同步清场（解析差异兜底）
+    bindQcard() // T136：提问卡片按钮/回车绑定（innerHTML 重建后必须重绑）
     // jumpBottom 是静态节点（HTML 里定义），innerHTML 重写不会碰它
     // T45：导图横向偏移回填（先同步来一次，再补一帧兜住布局尚未算完的情况）
     restoreMmScroll()
@@ -2808,16 +2811,52 @@ function render() {
   renderQaRail()
   // 状态
   updateSendBtn()
-  if (question) {
-    $("question").className = "show"
-    $("question").querySelector(".q").textContent = question.question
-    const opts = question.options ?? []
-    $("question").querySelector(".opts").innerHTML = opts.map((o, i) =>
-      `<button data-o="${esc(o)}">${i + 1}) ${esc(o)}${o === question.defaultOption ? ' <span class="star">推荐（点击即选）</span>' : ""}</button>`
-    ).join("")
-    $("question").querySelectorAll(".opts button").forEach((b) => b.onclick = () => answer(b.dataset.o))
-  } else { $("question").className = "" }
 }
+
+// T136 提问卡片：渲染在消息流尾部（输出区），白底卡片样式对齐消息气泡；
+// 60s 倒计时超时自动按推荐答案（defaultOption，其次第一项）提交——不让回合无限挂死。
+const Q_LIMIT_MS = 60000
+let qDeadline = 0, qSeen = null // qSeen=question 对象引用：新问题出现时重置倒计时
+function qcardHtml() {
+  if (!question) return ""
+  const opts = question.options ?? []
+  return `<div class="qcard" id="qcard">` +
+    `<div class="qhead"><span class="qtag">需要你的选择</span><span class="qtimer" id="qTimer"></span></div>` +
+    `<div class="qtext">${esc(question.question)}</div>` +
+    (opts.length ? `<div class="qopts">${opts.map((o, i) =>
+      `<button data-o="${esc(o)}">${i + 1}) ${esc(o)}${o === question.defaultOption ? '<span class="qdef">推荐</span>' : ""}</button>`).join("")}</div>` : "") +
+    `<div class="qfree"><input id="freeInput" placeholder="或输入自定义回答…"><button id="btnFree">回答</button></div>` +
+    `</div>`
+}
+function bindQcard() {
+  const card = $("qcard")
+  if (!card) return
+  card.querySelectorAll(".qopts button").forEach((b) => b.onclick = () => answer(b.dataset.o))
+  const btn = $("btnFree"), inp = $("freeInput")
+  if (btn) btn.onclick = () => { const v = inp.value.trim(); if (v) answer(v) }
+  if (inp) inp.onkeydown = (e) => { if (e.key === "Enter" && inp.value.trim()) answer(inp.value.trim()) }
+  qTick() // 渲染完立刻刷一次倒计时文本（不等下一秒的 interval）
+}
+// 倒计时 tick：只更新卡内计时 span（不整卡重绘），归零自动按推荐提交
+function qTick() {
+  if (!question) { qSeen = null; return }
+  if (qSeen !== question) { qSeen = question; qDeadline = Date.now() + Q_LIMIT_MS }
+  const left = qDeadline - Date.now()
+  const t = $("qTimer")
+  if (t) {
+    const s = Math.max(0, Math.ceil(left / 1000))
+    t.textContent = `${s}s 后自动按推荐回答`
+    t.classList.toggle("urgent", s <= 10)
+  }
+  if (left <= 0) {
+    const def = question.defaultOption ?? question.options?.[0]
+    if (def != null) {
+      $("status").textContent = "超时未回答，已按推荐选项继续"
+      answer(def)
+    }
+  }
+}
+setInterval(qTick, 1000)
 
 function answer(a) { ws.send(JSON.stringify({ type: "answer", answer: a, sessionId: activeId })); question = null; render() }
 
@@ -4213,8 +4252,7 @@ $("permMenu").querySelectorAll(".mi").forEach((el) => el.onclick = async () => {
   } catch (e) { $("banner").style.display = "block"; $("banner").textContent = `切换失败：${e.message}` }
   closePermMenu()
 })
-$("btnFree").onclick = () => { const v = $("freeInput").value.trim(); if (v) { $("freeInput").value = ""; answer(v) } }
-$("freeInput").onkeydown = (e) => { if (e.key === "Enter") { const v = $("freeInput").value.trim(); if (v) { $("freeInput").value = ""; answer(v) } } }
+// T136：提问卡片的 btnFree/freeInput 绑定已移入 bindQcard()（卡片现在随 render 动态重建）
 
 // P0-2：红绿灯点击弹一键压缩
 function closeCtxPop() { $("ctxPop").classList.remove("show") }
