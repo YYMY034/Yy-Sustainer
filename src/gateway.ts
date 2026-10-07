@@ -776,6 +776,8 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
       ts: Date.now(),
       model: r?.model ?? model,
       steps: steps.map((s) => ({ ...s })),
+      // T137：本轮消耗挂到消息上——前端操作条尾部显示「N tok」（悬停看输入/输出/缓存明细）
+      usage: { in: turnIn, out: turnOut, cached: r?.usage?.cached ?? 0 },
     }
     // D6：本轮模型实际改动的文件（含快照）挂到 assistant 消息上——前端显示「修改 N 个文件 + 撤销」
     const fileEdits = takeFileEdits(sessionId)
@@ -860,6 +862,8 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
         ts: Date.now(),
         model,
         steps: steps.map((s) => ({ ...s })),
+        // T137：停止的轮次也烧了真 token——同样挂上
+        usage: { in: turnTokens.in, out: turnTokens.out, cached: 0 },
       }
       persist(meta, [...(r?.compactedStored ?? msgsAfterUser), stopMsg])
       broadcast({ type: "message", sessionId, message: stopMsg, ctxPct: meta.ctxPct, usage: meta.usage })

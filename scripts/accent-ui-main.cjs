@@ -169,6 +169,25 @@ app.whenReady().then(async () => {
     activeId = null
     render()
     ws.send = realSend
+    // 11 T137：操作条尾部 token 显示（常驻、悬停明细；无 usage 的旧消息不显示）
+    streamingOn = false // ensureStream 留下的流式占位会压住 msg-acts 渲染，先收掉
+    push("fmtTok 格式", fmtTok(999) === "999" && fmtTok(1000) === "1.0k" && fmtTok(66341) === "66.3k", `${fmtTok(999)}/${fmtTok(1000)}/${fmtTok(66341)}`)
+    sessions.push({ id: "probe-sess-t", cwd: "C:\\p" })
+    activeId = "probe-sess-t"
+    messages.length = 0
+    messages.push({ ts: 1, role: "user", content: "hi" })
+    messages.push({ ts: 2, role: "assistant", content: "答", usage: { in: 60000, out: 775, cached: 27200 } })
+    render()
+    const tok = document.querySelector("#messages .msg-tok")
+    push("消息带 usage → token 常驻显示", !!tok && tok.textContent === "60.8k", tok?.textContent)
+    push("token 悬停明细", (tok?.title ?? "").includes("输入 60.0k") && (tok?.title ?? "").includes("输出 775"), tok?.title)
+    messages.push({ ts: 3, role: "assistant", content: "旧消息无 usage" })
+    render()
+    push("无 usage 的旧消息不显示", document.querySelectorAll("#messages .msg-tok").length === 1)
+    messages.length = 0
+    sessions.pop()
+    activeId = null
+    render()
     return JSON.stringify(out)
   }
   const script = `(async () => { try { return await (${assertFn.toString()})() } catch (e) { return JSON.stringify([["脚本异常", false, e && e.stack ? String(e.stack).split("\\n").slice(0, 4).join(" | ") : String(e)]]) } })()`

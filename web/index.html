@@ -496,13 +496,17 @@
   .msg.user .msgops button { background: transparent; border: none; color: var(--dim); cursor: pointer; font-size: 11px; padding: 3px 6px; border-radius: 6px; font-family: inherit; white-space: nowrap; }
   .msg.user .msgops button:hover { color: var(--accent); background: var(--panel2); }
   /* T20 assistant 回复操作条：重新生成 / 点赞 / 点踩 / 复制（悬停浮现，图标手绘 SVG） */
-  .msg-acts { display: flex; gap: 2px; margin: 2px 0 0; opacity: 0; pointer-events: none; transition: opacity .15s; }
+  .actsrow { display: flex; align-items: center; margin: 2px 0 0; }
+  .actsrow .msg-acts { margin: 0; }
+  .msg-acts { display: flex; gap: 2px; opacity: 0; pointer-events: none; transition: opacity .15s; }
   .msg.assistant:hover .msg-acts, .msg-acts.pinned { opacity: 1; pointer-events: auto; }
   .msg-acts button { background: transparent; border: none; color: var(--dim); cursor: pointer; width: 26px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
   .msg-acts button:hover { color: var(--text); background: var(--panel2); }
   .msg-acts button.active { color: var(--accent); }
   .msg-acts button.active:hover { color: var(--accent); }
   .msg-acts button svg { display: block; }
+  /* T137 本轮 token 消耗：常驻操作条尾部（操作条悬停显隐不影响它） */
+  .msg-tok { display: inline-block; margin-left: 6px; font-size: 11px; color: var(--dim); opacity: .85; cursor: default; white-space: nowrap; }
   .msg-acts .copied-tip { font-size: 11px; color: var(--accent); align-self: center; margin-left: 4px; opacity: 0; transition: opacity .15s; }
   .msg-acts .copied-tip.show { opacity: 1; }
   /* P1-8 气泡内图片小气泡：行内圆角缩略图，与输入框 imgchip 同风格 */
@@ -529,9 +533,6 @@
   .file-card .fc-nm { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .file-card .fc-dl { flex-shrink: 0; color: var(--dim); display: flex; align-items: center; padding: 3px; border-radius: 5px; }
   .file-card .fc-dl:hover { color: var(--accent); background: var(--panel); }
-  .file-card .fc-share { flex-shrink: 0; color: var(--dim); display: flex; align-items: center; padding: 3px; border-radius: 5px; }
-  .file-card .fc-share:hover { color: var(--accent); background: var(--panel); }
-  .file-card .fc-share.copied { color: var(--user); }
   .file-card .fc-browser, .file-card .fc-folder { flex-shrink: 0; color: var(--dim); display: flex; align-items: center; padding: 3px; border-radius: 5px; }
   .file-card .fc-browser:hover, .file-card .fc-folder:hover { color: var(--accent); background: var(--panel); }
   /* T21 产物面板（.artifacts）已在 T67 移除——「修改 N 个文件」下拉（.fileops .fo-file）承接：
@@ -2738,7 +2739,7 @@ function render() {
               ? `<img src="/api/file?p=${encodeURIComponent(fp)}" alt="" onerror="this.style.display='none'">`
               : `<svg class="fc-ico" width="18" height="18" viewBox="0 0 16 16" fill="none"><path d="M4 1.5h5.5L13 5v9.5a1 1 0 01-1 1H4a1 1 0 01-1-1v-12a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9.5 1.5V5H13" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>`) +
             `<span class="fc-nm">${esc(name)}</span>` +
-            `<span class="fc-share" data-path="${esc(fp)}" title="复制分享链接（本机网关地址）"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="11.5" cy="4" r="2.1" stroke="currentColor" stroke-width="1.4"/><circle cx="4.5" cy="8" r="2.1" stroke="currentColor" stroke-width="1.4"/><circle cx="11.5" cy="12" r="2.1" stroke="currentColor" stroke-width="1.4"/><path d="M6.4 7.1l3.3-2.2M6.4 8.9l3.3 2.2" stroke="currentColor" stroke-width="1.4"/></svg></span>` +
+            // T137：删「复制分享链接」——本机地址发出去别人也打不开，浏览器打开/文件位置/下载更实用
             `<span class="fc-browser" data-path="${esc(fp)}" title="在系统浏览器打开"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.6"/><path d="M2.4 8h11.2M8 2.4c1.9 1.6 1.9 9.6 0 11.2M8 2.4c-1.9 1.6-1.9 9.6 0 11.2"/></svg></span>` +
             (window.yyagentApi ? `<span class="fc-folder" data-path="${esc(fp)}" title="打开文件位置（可直接拖拽发给微信/QQ 好友）"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.8 4.2c0-.77.62-1.4 1.4-1.4h3l1.5 1.7h5.1c.78 0 1.4.63 1.4 1.4v6.9c0 .78-.62 1.4-1.4 1.4H3.2a1.4 1.4 0 01-1.4-1.4V4.2z" stroke-linejoin="round"/></svg></span>` : "") +
             `<span class="fc-dl" data-path="${esc(fp)}" title="下载"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 2v8m0 0l3-3m-3 3L5 7M2.5 12.5h11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span></span>`
@@ -2782,12 +2783,19 @@ function render() {
       let msgActs = ""
       if (m.role === "assistant" && !arch && !m.content.startsWith("[出错]") && !streamingOn) {
         const fb = m.feedback ?? ""
-        msgActs = `<div class="msg-acts" data-ts="${m.ts}">` +
+        // T137：操作条尾部显示本轮 token 消耗（悬停看输入/输出/缓存明细）；无 usage 的旧消息不显示。
+        // 外包 actsrow 让操作条（悬停显隐）与 token（常驻）同一行
+        const tu = m.usage
+        const tokTxt = tu ? fmtTok(tu.in + tu.out) : ""
+        const tokTip = tu ? `输入 ${fmtTok(tu.in)} · 输出 ${fmtTok(tu.out)}${tu.cached ? ` · 缓存命中 ${fmtTok(tu.cached)}` : ""}` : ""
+        msgActs = `<div class="actsrow"><div class="msg-acts" data-ts="${m.ts}">` +
           `<button data-op="regen" title="用原提问重新生成这条回复">${REGEN_SVG}</button>` +
           `<button data-op="up" title="赞这个回答（会记入会话记忆，影响后续回答）${fb === "up" ? " · 已点赞" : ""}" class="${fb === "up" ? "active" : ""}">${THUMB_UP_SVG}</button>` +
           `<button data-op="down" title="踩这个回答（会记入会话记忆，提醒模型改进）${fb === "down" ? " · 已点踩" : ""}" class="${fb === "down" ? "active" : ""}">${THUMB_DOWN_SVG}</button>` +
           `<button data-op="copy" title="复制全文">${COPY_SVG}</button>` +
           `<span class="copied-tip">已复制</span>` +
+          `</div>` +
+          (tokTxt ? `<span class="msg-tok" title="${esc(tokTip)}">${tokTxt}</span>` : "") +
           `</div>`
       }
       return `${divider}<div class="msg assistant${arch}" id="msg${i}"><div class="who">${who}</div>${assistBody}${steps}${msgActs}</div>${turnSep}`
@@ -3168,7 +3176,7 @@ function bindMediaEvents() {
   // assistant 输出的本地文件卡片：图片 → 查看器；其他 → 下载（操作按钮自己处理，不触发卡片默认行为）
   box.querySelectorAll(".file-card").forEach((el) => {
     el.onclick = (e) => {
-      if (e.target.closest(".fc-dl") || e.target.closest(".fc-share") || e.target.closest(".fc-browser") || e.target.closest(".fc-folder")) return
+      if (e.target.closest(".fc-dl") || e.target.closest(".fc-browser") || e.target.closest(".fc-folder")) return
       const p = el.dataset.path
       if (el.dataset.isimg === "1") openImageViewer(`/api/file?p=${encodeURIComponent(p)}`, p.split(/[\\/]/).pop())
       else downloadFile(p)
@@ -3177,23 +3185,7 @@ function bindMediaEvents() {
   // P2-4 成果交付：复制分享链接（本机网关地址，局域网内可直接打开）
   // T70：链接带上配对 token（手机等局域网设备访问 /api/file 需要它）
   // T135 的 shareUrlFor/absPathFor 是全局函数（downloadFile 旁），此处直接引用
-  box.querySelectorAll(".file-card .fc-share").forEach((el) => {
-    el.onclick = async (e) => {
-      e.stopPropagation()
-      let lan = true
-      try { lan = (await (await fetch("/api/pair")).json())?.lan !== false } catch { /* 本机取不到就不断言监听范围 */ }
-      const url = await shareUrlFor(el.dataset.path)
-      try {
-        await navigator.clipboard.writeText(url)
-        el.classList.add("copied")
-        setTimeout(() => el.classList.remove("copied"), 1500)
-        if (!lan) alert("链接已复制。注意：当前网关只监听本机（lanShare 未开启），此链接在手机等其它设备上打不开。")
-      } catch {
-        // 剪贴板不可用（非 https 等）退化为 prompt
-        window.prompt("复制此分享链接：", url)
-      }
-    }
-  })
+  // T137：fc-share（复制分享链接）已删——本机地址发出去别人也打不开，浏览器打开/文件位置/下载更实用
   // T135：在系统浏览器打开——Electron 壳的 setWindowOpenHandler 会把它交给默认浏览器；
   // 手机等普通浏览器环境就是开新标签（地址是本机/局域网网关，需在同一网络）
   box.querySelectorAll(".file-card .fc-browser").forEach((el) => {
@@ -3836,6 +3828,11 @@ function actIcon(name) { return _AIC(ACT_ICON_SET[ACT_ICON[name] ?? "box"]) }
 function fmtDur(ms) {
   if (ms == null) return ""
   return ms >= 10000 ? `${Math.round(ms / 1000)}s` : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
+}
+// T137 token 数格式：千以下原样，往上一位小数 k，十万级 m
+function fmtTok(n) {
+  if (!n) return "0"
+  return n >= 100000 ? `${(n / 1000000 >= 1 ? (n / 1000000).toFixed(1) + "m" : (n / 1000).toFixed(0) + "k")}` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 }
 function cleanStepArg(arg) {
   return String(arg || "").replace(/file_path=|command=|pattern=|query=|path=/g, "").trim()

@@ -51,6 +51,8 @@ export interface StoredMessage {
   fileEdits?: Array<{ path: string; kind: "write" | "edit" }>
   /** 用户对本条 assistant 回复的评分（点赞/点踩），进入会话记忆供模型感知 */
   feedback?: "up" | "down"
+  /** T137：本轮 token 消耗（in/out 输入输出，cached 其中缓存命中部分）——前端操作条尾部显示 */
+  usage?: { in: number; out: number; cached: number }
 }
 
 interface SessionFile {
