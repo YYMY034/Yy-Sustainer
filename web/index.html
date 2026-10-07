@@ -731,7 +731,7 @@
   #queueList .qitem-row button:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
   #queueList .qitem-row button.qdel:hover { color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); }
   /* P1-8 输入区：contenteditable（支持内嵌图片气泡），替代原 textarea */
-  #input { width: 100%; background: transparent; border: none; color: var(--text); font: inherit; min-height: 26px; max-height: 220px; overflow-y: auto; padding: 0 2px; outline: none; white-space: pre-wrap; word-break: break-word; }
+  #input { width: 100%; background: transparent; border: none; color: var(--text); font: inherit; min-height: 33px; max-height: 220px; overflow-y: auto; padding: 0 2px; outline: none; white-space: pre-wrap; word-break: break-word; }
   #input:empty::before { content: attr(data-placeholder); color: var(--dim); pointer-events: none; }
   /* 内嵌图片小气泡：行内圆角缩略图，contenteditable=false 整体删除 */
   #input .imgchip { display: inline-block; vertical-align: middle; margin: 2px 3px; border-radius: 8px; overflow: hidden; line-height: 0; cursor: default; user-select: none; }
@@ -4350,7 +4350,7 @@ async function doSend() {
   if (r.ok && r.status !== 202 && activeId) ensureStream()
 }
 // 输入框逐行自增高：初始为单行高度，内容每多一行长一行；超过上限后内部滚动
-const INPUT_BASE_H = 26, INPUT_MAX_H = 220
+const INPUT_BASE_H = 33, INPUT_MAX_H = 220 // T139：默认高度拉长 1/4（26→33），底部工具栏不再贴字
 function autoGrow() {
   const el = $("input")
   el.style.height = "auto"
