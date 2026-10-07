@@ -50,7 +50,7 @@ if (!line) { console.error("\n没拿到断言结果"); fail = 1 } else {
       if (!ok) fail++
       console.log(`${ok ? "ok  " : "FAIL"} ${label}${extra && !ok ? " — " + extra : ""}`)
     }
-  } catch (e) { console.error("结果解析失败:", e.message); fail = 1 }
+  } catch (e) { console.error("结果解析失败:", e instanceof Error ? e.message : e); fail = 1 }
 }
 gw.kill()
 try { rmSync(HOME, { recursive: true, force: true }) } catch {}
