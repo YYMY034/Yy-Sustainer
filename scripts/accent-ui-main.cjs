@@ -180,6 +180,8 @@ app.whenReady().then(async () => {
     render()
     const tok = document.querySelector("#messages .msg-tok")
     push("消息带 usage → token 常驻显示", !!tok && tok.textContent === "60.8k", tok?.textContent)
+    push("token 在操作条内（hover 同显隐）", !!tok?.closest(".msg-acts"))
+    push("token 紧挨复制按钮（无远距离 margin）", !!tok && getComputedStyle(tok).marginLeft === "6px", getComputedStyle(tok).marginLeft)
     push("token 悬停明细", (tok?.title ?? "").includes("输入 60.0k") && (tok?.title ?? "").includes("输出 775"), tok?.title)
     messages.push({ ts: 3, role: "assistant", content: "旧消息无 usage" })
     render()

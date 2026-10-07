@@ -1310,18 +1310,20 @@ const MIME: Record<string, string> = {
 function serveStatic(res: http.ServerResponse, urlPath: string): void {
   let p = urlPath === "/" ? "/index.html" : urlPath
   const full = path.join(WEB_DIR, p)
+  // T139：页面不缓存——网关是单文件 SPA、改 UI 靠刷新生效，启发式缓存会让用户看不到新版
+  const noCache = { "Cache-Control": "no-cache" }
   if (!full.startsWith(WEB_DIR) || !fs.existsSync(full) || !fs.statSync(full).isFile()) {
     // 单页应用兜底：未命中路径回 index.html
     const index = path.join(WEB_DIR, "index.html")
     if (fs.existsSync(index)) {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", ...noCache })
       res.end(fs.readFileSync(index))
       return
     }
     res.writeHead(404).end("not found")
     return
   }
-  res.writeHead(200, { "Content-Type": MIME[path.extname(full)] ?? "application/octet-stream" })
+  res.writeHead(200, { "Content-Type": MIME[path.extname(full)] ?? "application/octet-stream", ...noCache })
   res.end(fs.readFileSync(full))
 }
 
