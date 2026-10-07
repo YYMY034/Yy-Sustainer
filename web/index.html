@@ -177,6 +177,9 @@
   .taskitem .tn { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
   .taskitem.disabled .tn { color: var(--dim); }
   .taskitem .tcron { font-size: 10px; color: var(--dim); flex-shrink: 0; }
+  .taskitem .trun { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: none; border-radius: 5px; background: transparent; color: var(--dim); font-size: 9px; cursor: pointer; flex-shrink: 0; opacity: 0; transition: opacity .12s ease, color .12s ease; }
+  .taskitem:hover .trun { opacity: 1; }
+  .taskitem .trun:hover { color: var(--accent); background: var(--panel2); }
   /* 搜索弹层（T65 重做：居中命令面板 + 粗黑框输入 + 分类 chips 全部/操作/任务/文件） */
   #searchPop { position: fixed; z-index: 120; left: 50%; top: 12vh; transform: translateX(-50%); width: 640px; max-width: calc(100vw - 24px); max-height: 72vh; background: var(--panel); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 18px 60px var(--shadow); display: none; flex-direction: column; overflow: hidden; }
   #searchPop.show { display: flex; }
@@ -2443,12 +2446,25 @@ function renderTasks() {
   $("taskList").innerHTML = tasksCache.length ? tasksCache.map((t) => {
     const cls = t.running ? "running" : !t.enabled ? "disabled" : t.last ? (t.last.ok ? "ok" : "fail") : ""
     const tip = t.last ? (t.last.ok ? `上次完成：${new Date(t.last.ts).toLocaleString()}` : `上次失败：${t.last.error ?? ""}`) : "尚未运行"
-    return `<div class="taskitem ${cls}" title="${esc(tip)}（点击立即运行）" data-name="${esc(t.name)}"><span class="tdot"></span><span class="tn">${esc(t.name)}</span><span class="tcron">${esc(t.cron)}</span></div>`
+    // T133：主点击 → 自动化页编辑该任务；hover ▶ 按钮 → 立即运行（原行为不丢）
+    return `<div class="taskitem ${cls}" title="${esc(tip)}（点击编辑 · ▶ 立即运行）" data-name="${esc(t.name)}"><span class="tdot"></span><span class="tn">${esc(t.name)}</span><span class="tcron">${esc(t.cron)}</span><button class="trun" title="立即运行" data-name="${esc(t.name)}">▶</button></div>`
   }).join("") : `<div style="font-size:12px;color:var(--dim);padding:2px 10px;">还没有任务</div>`
-  $("taskList").querySelectorAll(".taskitem").forEach((el) => el.onclick = async () => {
+  $("taskList").querySelectorAll(".taskitem").forEach((el) => {
     const name = el.dataset.name
+    el.onclick = () => {
+      // T133：跳自动化页并打开该任务的编辑表单（startEditTask 会滚动到表单）
+      showPage("autoPage")
+      renderAutoList()
+      loadTasks()
+      startEditTask(name)
+    }
+  })
+  $("taskList").querySelectorAll(".taskitem .trun").forEach((btn) => btn.onclick = async (e) => {
+    e.stopPropagation() // 别触发外层的跳编辑
+    const name = btn.dataset.name
     const r = await fetch("/api/tasks/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
-    if (!r.ok) { const e = await r.json(); $("status").textContent = e.error ?? "启动失败" }
+    if (!r.ok) { const er = await r.json(); $("status").textContent = er.error ?? "启动失败" }
+    else $("status").textContent = `任务「${name}」已启动`
   })
 }
 

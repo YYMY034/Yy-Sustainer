@@ -19,7 +19,7 @@ app.whenReady().then(async () => {
   }
   // 给启动时的 loadUsage/refreshState 一点时间
   await new Promise((r) => setTimeout(r, 1200))
-  const script = `(${async function () {
+  const assertFn = async function () {
     const out = []
     const $ = (s) => document.querySelector(s)
     const cs = () => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim()
@@ -69,8 +69,30 @@ app.whenReady().then(async () => {
     push("正文连续空行折叠成一个", (para.match(/\n/g) || []).length === 2, JSON.stringify(para))
     // 新格式（无 padding）正常渲染
     push("新格式正常", (fmtBlock("<thinking>新</thinking>结果").match(/think-block/g) || []).length === 1)
+    // 7 T133：侧栏任务项点击 → 自动化页编辑表单；▶ 按钮 → 原地立即运行
+    const cr = await fetch("/api/tasks/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "demo-probe", cron: "0 9 * * *", prompt: "测试任务" }) })
+    push("创建测试任务", cr.ok)
+    await loadTasks()
+    const item = document.querySelector('#taskList .taskitem[data-name="demo-probe"]')
+    push("侧栏渲染出任务项", !!item)
+    item.querySelector(".trun").style.opacity = "1" // 无头环境无 hover，强制可见以便点击
+    try { item.click() } catch (e) { push("item.click 同步异常", false, e && e.stack ? String(e.stack).split("\n").slice(0, 3).join(" | ") : e) }
+    const ap = $("#autoPage")
+    push("autoPage 节点存在", !!ap, typeof ap)
+    push("主点击切到自动化页", !!ap && ap.classList.contains("show"))
+    push("表单标题=编辑任务", $("#autoFormTitle").textContent.includes("demo-probe"), $("#autoFormTitle").textContent)
+    push("任务名锁定（disabled）", $("#afName").disabled === true)
+    push("cron 已填入", $("#afCron").value === "0 9 * * *", $("#afCron").value)
+    // 回主界面再点 ▶：验证 stopPropagation（不触发跳编辑）+ 运行请求发出
+    showPage(null)
+    $("#status").textContent = ""
+    item.querySelector(".trun").click()
+    await new Promise((r) => setTimeout(r, 400))
+    push("▶ 不触发页面跳转", !$("#autoPage").classList.contains("show"))
+    push("▶ 触发运行提示", $("#status").textContent.includes("demo-probe"), $("#status").textContent)
     return JSON.stringify(out)
-  }.toString()})()`
+  }
+  const script = `(async () => { try { return await (${assertFn.toString()})() } catch (e) { return JSON.stringify([["脚本异常", false, e && e.stack ? String(e.stack).split("\\n").slice(0, 4).join(" | ") : String(e)]]) } })()`
   try {
     const res = await win.webContents.executeJavaScript(script, true)
     console.log("YY_PROBE_RESULT:", res)
