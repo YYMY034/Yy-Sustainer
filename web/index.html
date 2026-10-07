@@ -532,6 +532,8 @@
   .file-card .fc-share { flex-shrink: 0; color: var(--dim); display: flex; align-items: center; padding: 3px; border-radius: 5px; }
   .file-card .fc-share:hover { color: var(--accent); background: var(--panel); }
   .file-card .fc-share.copied { color: var(--user); }
+  .file-card .fc-browser, .file-card .fc-folder { flex-shrink: 0; color: var(--dim); display: flex; align-items: center; padding: 3px; border-radius: 5px; }
+  .file-card .fc-browser:hover, .file-card .fc-folder:hover { color: var(--accent); background: var(--panel); }
   /* T21 产物面板（.artifacts）已在 T67 移除——「修改 N 个文件」下拉（.fileops .fo-file）承接：
      同款 fmIcon 类型图标 + 点击进实时预览/下载，不再在回复末尾重复列一份文件清单 */
   /* 搜索跳转命中高亮：短暂描边 + 渐隐 */
@@ -2736,6 +2738,8 @@ function render() {
               : `<svg class="fc-ico" width="18" height="18" viewBox="0 0 16 16" fill="none"><path d="M4 1.5h5.5L13 5v9.5a1 1 0 01-1 1H4a1 1 0 01-1-1v-12a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9.5 1.5V5H13" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>`) +
             `<span class="fc-nm">${esc(name)}</span>` +
             `<span class="fc-share" data-path="${esc(fp)}" title="复制分享链接（本机网关地址）"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="11.5" cy="4" r="2.1" stroke="currentColor" stroke-width="1.4"/><circle cx="4.5" cy="8" r="2.1" stroke="currentColor" stroke-width="1.4"/><circle cx="11.5" cy="12" r="2.1" stroke="currentColor" stroke-width="1.4"/><path d="M6.4 7.1l3.3-2.2M6.4 8.9l3.3 2.2" stroke="currentColor" stroke-width="1.4"/></svg></span>` +
+            `<span class="fc-browser" data-path="${esc(fp)}" title="在系统浏览器打开"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.6"/><path d="M2.4 8h11.2M8 2.4c1.9 1.6 1.9 9.6 0 11.2M8 2.4c-1.9 1.6-1.9 9.6 0 11.2"/></svg></span>` +
+            (window.yyagentApi ? `<span class="fc-folder" data-path="${esc(fp)}" title="打开文件位置（可直接拖拽发给微信/QQ 好友）"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.8 4.2c0-.77.62-1.4 1.4-1.4h3l1.5 1.7h5.1c.78 0 1.4.63 1.4 1.4v6.9c0 .78-.62 1.4-1.4 1.4H3.2a1.4 1.4 0 01-1.4-1.4V4.2z" stroke-linejoin="round"/></svg></span>` : "") +
             `<span class="fc-dl" data-path="${esc(fp)}" title="下载"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 2v8m0 0l3-3m-3 3L5 7M2.5 12.5h11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span></span>`
         }
       }
@@ -2984,6 +2988,18 @@ function downloadDataUrl(du, filename) {
   a.download = filename || "image"
   document.body.appendChild(a); a.click(); a.remove()
 }
+// T135：分享链接构造（分享/浏览器打开共用）——带配对 token，局域网设备可直接访问
+async function shareUrlFor(path) {
+  let tok = ""
+  try { tok = (await (await fetch("/api/pair")).json())?.token || "" } catch { /* 取不到就不带 token */ }
+  return `${location.origin}/api/file?p=${encodeURIComponent(path)}${tok ? `&token=${tok}` : ""}`
+}
+// T135：相对路径 → 绝对路径（当前会话工作区）；模型写文件常给相对路径，showItemInFolder 需要绝对
+function absPathFor(p) {
+  if (/^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\")) return p
+  const cwd = sessions.find((s) => s.id === activeId)?.cwd
+  return cwd ? `${cwd.replace(/[\\/]+$/, "")}/${p}` : p
+}
 async function downloadFile(pathOrUrl, filename) {
   // 经网关 /api/file 读本地文件 → blob 下载（文件名取路径末段）
   // T92：也接受 /api/file?p=... 形式的引用（会话图片外置后 img.src 就是它），自动还原成路径
@@ -3110,10 +3126,10 @@ function bindMediaEvents() {
       }
     }
   })
-  // assistant 输出的本地文件卡片：图片 → 查看器；其他 → 下载
+  // assistant 输出的本地文件卡片：图片 → 查看器；其他 → 下载（操作按钮自己处理，不触发卡片默认行为）
   box.querySelectorAll(".file-card").forEach((el) => {
     el.onclick = (e) => {
-      if (e.target.closest(".fc-dl") || e.target.closest(".fc-share")) return
+      if (e.target.closest(".fc-dl") || e.target.closest(".fc-share") || e.target.closest(".fc-browser") || e.target.closest(".fc-folder")) return
       const p = el.dataset.path
       if (el.dataset.isimg === "1") openImageViewer(`/api/file?p=${encodeURIComponent(p)}`, p.split(/[\\/]/).pop())
       else downloadFile(p)
@@ -3121,18 +3137,13 @@ function bindMediaEvents() {
   })
   // P2-4 成果交付：复制分享链接（本机网关地址，局域网内可直接打开）
   // T70：链接带上配对 token（手机等局域网设备访问 /api/file 需要它）
+  // T135 的 shareUrlFor/absPathFor 是全局函数（downloadFile 旁），此处直接引用
   box.querySelectorAll(".file-card .fc-share").forEach((el) => {
     el.onclick = async (e) => {
       e.stopPropagation()
-      let tok = ""
       let lan = true
-      try {
-        const pr = (await (await fetch("/api/pair")).json()) || {}
-        tok = pr.token || ""
-        // T92：lan=false 表示网关只监听本机，分享链接在别的设备上打不开——先说清楚，别让人白试
-        lan = pr.lan !== false
-      } catch { /* 本机取不到就不带 token，也不断言监听范围 */ }
-      const url = `${location.origin}/api/file?p=${encodeURIComponent(el.dataset.path)}${tok ? `&token=${tok}` : ""}`
+      try { lan = (await (await fetch("/api/pair")).json())?.lan !== false } catch { /* 本机取不到就不断言监听范围 */ }
+      const url = await shareUrlFor(el.dataset.path)
       try {
         await navigator.clipboard.writeText(url)
         el.classList.add("copied")
@@ -3142,6 +3153,23 @@ function bindMediaEvents() {
         // 剪贴板不可用（非 https 等）退化为 prompt
         window.prompt("复制此分享链接：", url)
       }
+    }
+  })
+  // T135：在系统浏览器打开——Electron 壳的 setWindowOpenHandler 会把它交给默认浏览器；
+  // 手机等普通浏览器环境就是开新标签（地址是本机/局域网网关，需在同一网络）
+  box.querySelectorAll(".file-card .fc-browser").forEach((el) => {
+    el.onclick = async (e) => {
+      e.stopPropagation()
+      window.open(await shareUrlFor(el.dataset.path), "_blank")
+    }
+  })
+  // T135：打开文件位置（资源管理器选中）——拖进微信/QQ 聊天框即可把文件发给朋友；
+  // 仅 Electron 环境有按钮（window.yyagentApi 由 preload 注入）
+  box.querySelectorAll(".file-card .fc-folder").forEach((el) => {
+    el.onclick = async (e) => {
+      e.stopPropagation()
+      const ok = await window.yyagentApi?.showInFolder(absPathFor(el.dataset.path))
+      $("status").textContent = ok ? "已打开文件位置——把文件拖进聊天框即可发给微信/QQ 好友" : "打开文件位置失败"
     }
   })
   box.querySelectorAll(".file-card .fc-dl").forEach((el) => {

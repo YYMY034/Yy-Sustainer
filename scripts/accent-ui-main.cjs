@@ -122,6 +122,18 @@ app.whenReady().then(async () => {
     window.__steps = []
     fakeMsg({ type: "think", sessionId: "other-session", on: true })
     push("异会话 think 不串场", !document.querySelector("#activity .act-line.pending"))
+    // 9 T135：成果分享三函数——absPathFor 绝对直通/相对拼 cwd、shareUrlFor 带 token 与路径
+    push("absPathFor 绝对路径直通", absPathFor("C:\\work\\a.html") === "C:\\work\\a.html")
+    push("absPathFor UNC 直通", absPathFor("\\\\srv\\share\\a.html").startsWith("\\\\srv"))
+    const testCwd = "C:\\proj\\demo"
+    sessions.push({ id: "probe-sess", cwd: testCwd })
+    activeId = "probe-sess"
+    push("absPathFor 相对路径拼 cwd", absPathFor("out/a.html") === "C:\\proj\\demo/out/a.html", absPathFor("out/a.html"))
+    const su = await shareUrlFor("out/a.html")
+    push("shareUrlFor 形态", su.startsWith(location.origin + "/api/file?p=") && su.includes("out%2Fa.html"), su)
+    push("无 cwd 时相对路径原样返回", (sessions.find((s) => s.id === activeId).cwd = "", absPathFor("b.html") === "b.html"))
+    sessions.pop()
+    activeId = null
     return JSON.stringify(out)
   }
   const script = `(async () => { try { return await (${assertFn.toString()})() } catch (e) { return JSON.stringify([["脚本异常", false, e && e.stack ? String(e.stack).split("\\n").slice(0, 4).join(" | ") : String(e)]]) } })()`

@@ -152,6 +152,9 @@ function createWindow() {
     },
   })  // 页面里所有外链交给系统浏览器，不在窗口内跳走
   win.webContents.setWindowOpenHandler(({ url }) => {
+    // T135：成果文件链接（/api/file）交系统浏览器——「在浏览器打开」要看 html 动画/文档效果，
+    // 新开 Electron 窗口没有浏览器 DevTools/下载/扩展，体验不对
+    if (url.includes("/api/file?")) { shell.openExternal(url); return { action: "deny" } }
     if (url.startsWith(`http://${HOST}:${PORT}`)) return { action: "allow" }
     shell.openExternal(url)
     return { action: "deny" }
@@ -279,6 +282,16 @@ ipcMain.handle("yyagent:pick-folder", async () => {
 // 自绘标题栏窗口控制：页面顶栏的最小化/关闭按钮（frame:false 无边框模式）
 ipcMain.handle("yyagent:win-minimize", () => { win?.minimize() })
 ipcMain.handle("yyagent:win-close", () => { win?.close() })
+
+// T135 成果分享：在资源管理器中显示文件（用户可直接拖进微信/QQ 发送）。
+// 路径由渲染进程拼好（相对路径已按会话 cwd 补全）；只接受字符串，防垃圾输入。
+ipcMain.handle("yyagent:show-in-folder", (_e, p) => {
+  try {
+    if (typeof p !== "string" || !p.trim()) return false
+    shell.showItemInFolder(p.trim())
+    return true
+  } catch { return false }
+})
 
 app.on("before-quit", () => {
   if (engine) {
