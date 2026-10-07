@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { normalize } from "node:path"
 import { homedir } from "node:os"
 import { randomUUID } from "node:crypto"
@@ -167,6 +167,8 @@ export function createSession(cwd: string, model?: string, title = "新对话"):
     cwd,
     model,
   }
+  // T140 排查插桩：批量/反复出现的会话（如 A-0~C-4 僵尸）要抓调用方——调用栈进 engine.log
+  console.log(`[会话] 创建 title=${JSON.stringify(title)} cwd=${cwd}\n${(new Error().stack ?? "").split("\n").slice(1, 5).join("\n")}`)
   // T92：原来这里「unshift + writeIndex」后又 persist()——两次读改写，锁外还可能被并发覆盖。
   // persist() 找不到 id 时本来就会 unshift，所以直接交给它（且它在锁内）即可。
   persist(meta, [])
@@ -207,17 +209,39 @@ export function persist(meta: SessionMeta, messages: StoredMessage[]): void {
       list[i] = meta
       return list
     }
+    // T140：刚被删除的会话不允许凭 persist 复活——checkpoint 定时器/任务队列的迟到写入
+    // 会把用户已删除的会话写回 index（实测「删了又回来」的机制之一）。tombstone 存活 30 分钟
+    //（长任务 timeoutMs 上限 15 分钟 + 余量），过期自动清理。
+    const t = tombstones.get(meta.id)
+    if (t != null) {
+      if (Date.now() - t < 30 * 60000) return list
+      tombstones.delete(meta.id)
+    }
     return [meta, ...list]
   })
 }
 
+/** T140：最近删除的会话 id → 删除时刻。persist 见到新鲜的 tombstone 就不 unshift（防复活） */
+const tombstones = new Map<string, number>()
+
 export function deleteSession(id: string): void {
+  tombstones.set(id, Date.now())
   mutateIndex((list) => list.filter((x) => x.id !== id))
+  // T140：删除改「移入回收站」——~/.yyagent/sessions-trash/ 保留 7 天，误删/异常可找回。
+  // 回收站清理顺手做：删除动作发生时清掉超期文件。原 unlink 直删导致用户会话一旦被
+  // 异常路径删掉就彻底找不回（备份 zip 7 天滚动，粒度不够）。
+  const f = join(ROOT, `${id}.json`)
   try {
-    unlinkSync(join(ROOT, `${id}.json`))
-  } catch {
-    /* 文件可能不存在 */
-  }
+    const trashDir = join(dirname(ROOT), "sessions-trash")
+    mkdirSync(trashDir, { recursive: true })
+    if (existsSync(f)) renameSync(f, join(trashDir, `${id}-${Date.now()}.json`))
+    for (const name of readdirSync(trashDir)) {
+      const p = join(trashDir, name)
+      try {
+        if (Date.now() - statSync(p).mtimeMs > 7 * 86400000) unlinkSync(p)
+      } catch { /* 单个文件清理失败不影响 */ }
+    }
+  } catch { /* 回收站失败不阻塞删除：文件留在原地，index 已移除（孤儿文件无害） */ }
 }
 
 /**
