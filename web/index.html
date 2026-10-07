@@ -496,17 +496,15 @@
   .msg.user .msgops button { background: transparent; border: none; color: var(--dim); cursor: pointer; font-size: 11px; padding: 3px 6px; border-radius: 6px; font-family: inherit; white-space: nowrap; }
   .msg.user .msgops button:hover { color: var(--accent); background: var(--panel2); }
   /* T20 assistant 回复操作条：重新生成 / 点赞 / 点踩 / 复制（悬停浮现，图标手绘 SVG） */
-  .actsrow { display: flex; align-items: center; margin: 2px 0 0; }
-  .actsrow .msg-acts { margin: 0; }
-  .msg-acts { display: flex; gap: 2px; opacity: 0; pointer-events: none; transition: opacity .15s; }
+  .msg-acts { display: flex; gap: 2px; margin: 2px 0 0; opacity: 0; pointer-events: none; transition: opacity .15s; }
   .msg.assistant:hover .msg-acts, .msg-acts.pinned { opacity: 1; pointer-events: auto; }
   .msg-acts button { background: transparent; border: none; color: var(--dim); cursor: pointer; width: 26px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
   .msg-acts button:hover { color: var(--text); background: var(--panel2); }
   .msg-acts button.active { color: var(--accent); }
   .msg-acts button.active:hover { color: var(--accent); }
   .msg-acts button svg { display: block; }
-  /* T137 本轮 token 消耗：常驻操作条尾部（操作条悬停显隐不影响它） */
-  .msg-tok { display: inline-block; margin-left: 6px; font-size: 11px; color: var(--dim); opacity: .85; cursor: default; white-space: nowrap; }
+  /* T139 token 消耗：操作条内部成员（跟按钮一起 hover 显隐），紧挨复制按钮 */
+  .msg-tok { display: inline-block; margin-left: 6px; font-size: 11px; color: var(--dim); align-self: center; cursor: default; white-space: nowrap; }
   .msg-acts .copied-tip { font-size: 11px; color: var(--accent); align-self: center; margin-left: 4px; opacity: 0; transition: opacity .15s; }
   .msg-acts .copied-tip.show { opacity: 1; }
   /* P1-8 气泡内图片小气泡：行内圆角缩略图，与输入框 imgchip 同风格 */
@@ -2783,19 +2781,18 @@ function render() {
       let msgActs = ""
       if (m.role === "assistant" && !arch && !m.content.startsWith("[出错]") && !streamingOn) {
         const fb = m.feedback ?? ""
-        // T137：操作条尾部显示本轮 token 消耗（悬停看输入/输出/缓存明细）；无 usage 的旧消息不显示。
-        // 外包 actsrow 让操作条（悬停显隐）与 token（常驻）同一行
+        // T137/T139：token 显示在操作条内部（跟按钮一起 hover 显隐、紧挨排列）；
+        // 悬停看输入/输出/缓存明细；无 usage 的旧消息不显示
         const tu = m.usage
         const tokTxt = tu ? fmtTok(tu.in + tu.out) : ""
         const tokTip = tu ? `输入 ${fmtTok(tu.in)} · 输出 ${fmtTok(tu.out)}${tu.cached ? ` · 缓存命中 ${fmtTok(tu.cached)}` : ""}` : ""
-        msgActs = `<div class="actsrow"><div class="msg-acts" data-ts="${m.ts}">` +
+        msgActs = `<div class="msg-acts" data-ts="${m.ts}">` +
           `<button data-op="regen" title="用原提问重新生成这条回复">${REGEN_SVG}</button>` +
           `<button data-op="up" title="赞这个回答（会记入会话记忆，影响后续回答）${fb === "up" ? " · 已点赞" : ""}" class="${fb === "up" ? "active" : ""}">${THUMB_UP_SVG}</button>` +
           `<button data-op="down" title="踩这个回答（会记入会话记忆，提醒模型改进）${fb === "down" ? " · 已点踩" : ""}" class="${fb === "down" ? "active" : ""}">${THUMB_DOWN_SVG}</button>` +
           `<button data-op="copy" title="复制全文">${COPY_SVG}</button>` +
-          `<span class="copied-tip">已复制</span>` +
-          `</div>` +
           (tokTxt ? `<span class="msg-tok" title="${esc(tokTip)}">${tokTxt}</span>` : "") +
+          `<span class="copied-tip">已复制</span>` +
           `</div>`
       }
       return `${divider}<div class="msg assistant${arch}" id="msg${i}"><div class="who">${who}</div>${assistBody}${steps}${msgActs}</div>${turnSep}`
@@ -4748,15 +4745,19 @@ function renderAiNews(items) {
     const item = items[Number(el.dataset.idx)]
     if (!item) return
     showPage(null) // 回到主界面
-    // 新建会话并让 agent 解读这条新闻
+    // T139 修正：新建会话 → 切过去 → 再发解读请求。原来只建会话发消息、前端不切换，
+    // 用户看到的还是旧会话，解读在"看不见的会话"里跑（重启后还冒出未完成回合横幅）
     try {
       const sid = ((await (await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) })).json())).id
+      await loadSessions()
+      await openSession(sid)
       await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sid, text: `请帮我深入解读这条 AI 新闻：
 标题：${item.title}
 摘要：${item.summary || "（无摘要）"}
 来源：${item.source || "未知"}
 
 请分析：① 这条新闻的背景和上下文 ② 对行业的影响 ③ 值得关注的后续发展。用中文回复。` }) })
+      $("status").textContent = "已在新会话开始解读这条新闻"
     } catch (e) { $("status").textContent = `创建解读会话失败：${e.message}` }
   })
 }
