@@ -55,6 +55,20 @@ const DANGEROUS = [
   "GITHUB_TOKEN=ghp_x",
   "DB_PASSWORD=hunter2",
   "chmod 777 /var/www",
+  // ---- T141：外部审计实测复现的四条绕过口子，钉在这里防回退 ----
+  // 解释器内联代码：载荷整个藏在字符串参数里，黑名单对内容盲 → 旧版全漏
+  `node -e "require('fs').rmSync('/',{recursive:true,force:true})"`,
+  `node --eval "require('child_process').execSync('format C:')"`,
+  `python -c "import shutil;shutil.rmtree('/')"`,
+  `powershell -c "Remove-Item C:/x -Recurse -Force"`,
+  `bash -c "rm -rf /"`,
+  `cmd /c "del /s /q C:\\x"`,
+  // 凭据赋值：旧正则漏 /i（小写漏网）+ `_` 不是词边界（带前缀变量名漏网）
+  "token=ghp_x",
+  "Token=ghp_x",
+  "github_token=ghp_x",
+  "my_api_key=sk-x",
+  "db_password=hunter2",
 ]
 for (const c of DANGEROUS) ok(`危险：${c.slice(0, 52)}`, isDangerCommand(c))
 
@@ -81,6 +95,32 @@ ok("历史大写盘符键仍命中（git status）", commandAllowed("git status"
 ok("整串相等也命中（git）", commandAllowed("git", WS))
 ok("无关命令不命中", !commandAllowed("curl http://x", WS))
 ok("解释器类不做首 token 放行（node -e 任意代码）", !commandAllowed("node -e \"require('fs').rmSync('/',{recursive:true})\"", WS))
+
+// T141：上面那条只证明了「node -e 不在白名单里」——**这不是防线**。
+// 历史教训：这条断言一直绿着，而 gate() 对 `node -e "<任意代码>"` 在 danger-confirm 档
+// 直接放行（因为当时 isDangerCommand 判它「非危险」）。**测了零件，没测入口，绿得毫无意义。**
+// 所以下面三条一律从 gate() 断言 —— 安全不变量只认入口。
+ok(
+  "解释器内联代码在 gate() 里被拦（不是只看白名单）",
+  typeof (await gate({
+    tool: "bash",
+    summary: "node -e",
+    danger: isDangerCommand(`node -e "require('fs').rmSync('/',{recursive:true})"`),
+    mode: "danger-confirm",
+    command: `node -e "require('fs').rmSync('/',{recursive:true})"`,
+    cwd: WS,
+  })) === "string",
+)
+ok(
+  "白名单命中的正常命令仍免打扰（修安全没修坏体验）",
+  (await gate({ tool: "bash", summary: "git status", danger: false, mode: "danger-confirm", command: "git status", cwd: WS })) === null,
+)
+const chained = "git status && rm -rf /important"
+ok(
+  "白名单前缀 + && 危险链必须拦（旧版：危险表命中了也被白名单短路放行）",
+  typeof (await gate({ tool: "bash", summary: chained, danger: isDangerCommand(chained), mode: "danger-confirm", command: chained, cwd: WS })) === "string",
+)
+ok("含连接符的命令不再命中白名单前缀", !commandAllowed(chained, WS))
 
 // ---------- 3. 权限门三档语义 ----------
 section("3. 权限门三档语义（无 broker = 无人值守）")

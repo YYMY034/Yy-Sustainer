@@ -11,6 +11,8 @@ import { loadConfig, saveConfig } from "./config.js"
  * 交互模式（有 broker）：确认 = ask 用户，拒绝则工具返回拒绝说明。
  * 无人值守（无 broker）：危险操作一律拒绝（绝不挂起），其余放行。
  * T84 项目级白名单：bash 命令命中当前 cwd 的 allowlist 前缀 → 跳过确认（confirm-all/danger-confirm 都生效）。
+ *      **T141 修正：白名单只在命令「不危险」时才免确认**——危险判定永远优先，且含 `&&`/`;`/`|`
+ *      的命令链不享受前缀匹配（详见 DANGER_PATTERNS 与 commandAllowed 的注释）。
  * T90 会话级授权：MCP 写操作 / 桌面操控这类「逐次问太烦、不问又太危险」的动作，
  *      同一会话内只问一次（grantScope），用户批准后本会话免问；换档位或删会话即失效。
  */
@@ -52,10 +54,28 @@ const DANGER_PATTERNS: RegExp[] = [
   /(^|\s)(invoke-expression|iex)\b/i,
   /(^|\s)(invoke-webrequest|iwr|curl|wget)\b[^|;&]*\|\s*(iex|invoke-expression|sh|bash|zsh|powershell|pwsh|cmd|node|python)\b/i,
   /(^|\s)(certutil|bitsadmin)\b[^|;&]*-(urlcache|transfer)/i,
+  // ---- 解释器内联代码（T141：黑名单的真实边界，必须按「调用形态」判）----
+  // 为什么补这一组：危险表是**语法层黑名单**，它看得见命令名、看不见参数里的内容。
+  // 而 `node -e "<任意代码>"` / `python -c "<任意代码>"` 把整个载荷藏在一个字符串里——
+  // 正则表对内容是盲的，于是「node -e "fs.rmSync('C:/',{recursive:true,force:true})"」
+  // 被判为「非危险」，在 danger-confirm 档**连问都不问直接执行**（实测复现）。
+  // 追内容是不可能的（编码、变量拼接、管道无穷无尽），所以只追**形态**：
+  // 只要出现「解释器 + 内联求值开关」，一律按危险处理——内联代码天然是不可审查的。
+  // 副作用：`node -e` / `python -c` 这类命令从此每次都要确认。这是有意的：
+  // 想跑脚本请写文件（`node ./x.mjs`），那至少留下可复查的产物。
+  /(^|\s)(node|nodejs|deno|bun)\s+(--eval|-e)\b/i,
+  /(^|\s)(python|python3|py|perl|ruby|php)\s+(-c|-e|-r)\b/i,
+  /(^|\s)(powershell|pwsh)\s+(-\w*c\b|-command\b)/i,
+  /(^|\s)(bash|sh|zsh)\s+-c\b/i,
+  /(^|\s)cmd(\.exe)?\s+\/c\b/i,
   // ---- 凭据赋值（密钥覆盖 / 外泄）----
-  /\bAPI_KEY\s*=/i,
-  /\b[A-Z_]*TOKEN\s*=/,
-  /\b[A-Z_]*(SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z_]*\s*=/i,
+  // 踩坑：原写法 `\b[A-Z_]*TOKEN\s*=` 有**两个**毛病，且相邻两行只中了一个：
+  //  ① 漏 `/i` → `token=` / `Token=` 全部漏网（同组另两行都带 i，这行是手误）；
+  //  ② `\b[A-Z_]*` 里的 `_` 本身就是词字符 → `github_token=` 里 `_` 与 `t` 之间**不存在词边界**，
+  //     所以只要变量名带前缀就永远匹配不到。改法：开头不写 `\b`，改成「任意词字符 + 关键字」。
+  /[A-Za-z0-9_]*API_KEY\s*=/i,
+  /[A-Za-z0-9_]*TOKEN\s*=/i,
+  /[A-Za-z0-9_]*(SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Za-z0-9_]*\s*=/i,
 ]
 
 export function isDangerCommand(command: string): boolean {
@@ -102,6 +122,17 @@ const INTERPRETER_LIKE = new Set([
   "powershell", "pwsh", "cmd", "bash", "sh", "zsh", "npx", "npm", "pnpm", "yarn", "wsl",
 ])
 
+/**
+ * T141：Shell 连接符。命令里一旦出现它们，白名单的**前缀**匹配就不能算数。
+ *
+ * 历史 bug（实测复现）：白名单里有 `npm run build`，于是
+ * `npm run build && rm -rf C:/重要数据` 命中前缀 → 免确认放行。
+ * 白名单授权的是「这条命令」，不是「以这条命令开头的任意命令链」——
+ * 前缀匹配遇上 `&&` / `;` / `|` 就等于给尾巴开了后门。
+ * 修法：含连接符的命令只认**整串相等**，不再享受前缀匹配。
+ */
+const SHELL_CONNECTORS = /[;&|\n]/
+
 /** 命令是否命中白名单：整串相等、以「前缀+空格」开头，或（非解释器类）首 token 相等 */
 export function commandAllowed(command: string, cwd: string | undefined): boolean {
   if (!cwd) return false
@@ -109,11 +140,14 @@ export function commandAllowed(command: string, cwd: string | undefined): boolea
   const prefixes = lists[allowlistKeyFor(cwd)] ?? []
   const cmd = command.trim().toLowerCase()
   if (!cmd) return false
+  // T141：含连接符 → 只能整串相等才算命中（前缀/首 token 匹配一律作废）
+  const chained = SHELL_CONNECTORS.test(cmd)
   const head = cmd.split(/\s+/)[0] ?? ""
   return prefixes.some((p) => {
     const lp = p.trim().toLowerCase()
     if (!lp) return false
     if (cmd === lp) return true
+    if (chained) return false
     if (cmd.startsWith(lp + " ")) return true
     // 单 token 前缀：只有非解释器类才允许「首 token 相等即放行」
     return head === lp && !lp.includes(" ") && !INTERPRETER_LIKE.has(lp)
@@ -156,8 +190,13 @@ export async function gate({
   grantScope,
 }: GateParams): Promise<string | null> {
   if (mode === "full-auto") return null
-  // T84：白名单命中 → 免确认（白名单属于用户显式授权，优先于 danger 判定）
-  if (tool === "bash" && command && commandAllowed(command, cwd)) return null
+  // T141：**危险判定优先于白名单**（顺序曾经反着，是 T90 留下的真 bug）。
+  // 原顺序是「白名单命中 → 直接放行」，而白名单短路排在危险判定之前，
+  // 于是 `npm run build && rm -rf C:/数据` 这种命令：危险表**明明命中了** `rm -rf`，
+  // 却因为前缀命中白名单而被短路放行——**判了也白判**（实测复现）。
+  // 白名单是「免打扰」授权，不是「免危险」授权：用户说「这条命令别再问我」，
+  // 不等于说「以它开头的危险命令链也别问」。
+  if (tool === "bash" && command && !danger && commandAllowed(command, cwd)) return null
   // T90：本会话此前已授权过该范围 → 免确认
   const gk = grantKey(sessionId, grantScope)
   if (gk && sessionGrants.has(gk)) return null
