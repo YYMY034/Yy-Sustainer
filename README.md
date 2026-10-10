@@ -130,9 +130,10 @@ yyagentd/
   electron/                   Electron 桌面壳
   web/                        Web 前端（配合 gateway）
   bin/yyagent.js              npm bin 入口（全局 `yyagent` 命令）
-  scripts/                    辅助脚本
+  scripts/                    辅助脚本（含回归探针，见下表）
+  docs/                       任务编号表 / 用户手册 / 子系统设计说明
+  tests/                      单元测试（node:test，跑 `npm test`）
   logs/                       运行日志
-  AGENT-WHITEPAPER.md         架构与交接白皮书（设计取舍、踩坑、下一个 agent 该看什么）
   ecosystem.config.cjs        pm2 守护配置
   yyagentd.config.json        定时任务定义
 ```
@@ -194,7 +195,12 @@ pm2 startup
 
 ### 更多细节
 
-架构设计取舍、踩坑记录、给下一个接手的 agent 的完整指南见同目录 **`AGENT-WHITEPAPER.md`**——那是下一个接手的人应该先读的第一份资料。
+- 用户手册与设置项说明：[`docs/USER-GUIDE.md`](docs/USER-GUIDE.md)
+- 任务编号与改动索引：[`docs/TASKS.md`](docs/TASKS.md)
+- 持久化 / 钩子 / 子代理等子系统设计说明：`docs/*.md`
+- 怎么参与开发：[`CONTRIBUTING.md`](CONTRIBUTING.md)
+
+> 架构取舍与踩坑的完整白皮书是**维护者本地文档，不随仓库发布**。仓库里能看的是上面这些。
 
 ## 许可证
 
