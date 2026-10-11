@@ -1597,6 +1597,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     //   retry  会把同样的请求再发一遍
     if (file.messages.some((mm) => mm.role === "assistant" && mm.ts > c.userTs)) {
       clearCheckpoint(sid)
+      broadcast({ type: "notice", sessionId: sid, text: "这一轮其实已经有完整的助手回复（恢复记录是残留），已清理、没有改动会话" })
       return json(res, 200, {
         ok: true,
         action: "already-done",
