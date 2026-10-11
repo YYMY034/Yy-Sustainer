@@ -1268,10 +1268,13 @@
       <h3>添加模型</h3>
       <div class="guide">
         <b>如何获取接入信息？</b><br>
-        1. 打开你的模型服务商控制台（如智谱、阿里百炼、OpenRouter、硅基流动、Ollama 等），找到 <b>API Keys</b> 页面创建一个密钥；<br>
-        2. 复制该服务商的 <b>API Base URL</b>（OpenAI 兼容接口地址，一般以 <b>/v1</b> 结尾，如 https://open.bigmodel.cn/api/paas/v4）；<br>
-        3. 在服务商的模型列表里复制要用的<b>模型 ID</b>（如 glm-4.7、qwen-max、deepseek-chat）；<br>
-        4. 填到下方即可。本地模型（Ollama / LM Studio）Base URL 填 http://127.0.0.1:11434/v1，API Key 随便填一个即可。
+        1. 点下方<b>供应商快捷选择</b>自动填好通道名称和接口地址（也可全手填）；<br>
+        2. 到该服务商控制台的 <b>API Keys</b> 页面创建密钥并填入下方；<br>
+        3. 在服务商的模型列表里复制要用的<b>模型 ID</b>（如 glm-4.7、qwen-max、deepseek-chat）填到下方即可。本地模型（Ollama / LM Studio）选对应预设，API Key 随便填一个即可。
+      </div>
+      <div class="frow">
+        <label>供应商快捷选择（自动填通道名 + 接口地址）</label>
+        <div id="amPresets" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
       </div>
       <div class="frow">
         <label>通道名称 <span class="req">*</span>（显示为模型前缀，如 zhipu/glm-4.7）</label>
@@ -2270,9 +2273,37 @@ function pickModel(spec) {
 }
 
 // 添加模型窗口
+// T146 供应商预设：选一家 → 通道名 + Base URL 自动填好，用户只需填 Key 和模型 ID。
+// 模型 ID 不预设（变化太快，写死会误导）——占位符提示去服务商控制台复制。
+const PROVIDER_PRESETS = [
+  { label: "智谱 GLM", provider: "zhipu", baseURL: "https://open.bigmodel.cn/api/paas/v4" },
+  { label: "DeepSeek 官方", provider: "deepseek", baseURL: "https://api.deepseek.com/v1" },
+  { label: "硅基流动", provider: "siliconflow", baseURL: "https://api.siliconflow.cn/v1" },
+  { label: "阿里百炼", provider: "bailian", baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+  { label: "月之暗面 Kimi", provider: "moonshot", baseURL: "https://api.moonshot.cn/v1" },
+  { label: "阶跃星辰", provider: "stepfun", baseURL: "https://api.stepfun.com/v1" },
+  { label: "MiniMax", provider: "minimax", baseURL: "https://api.minimax.chat/v1" },
+  { label: "火山方舟（豆包）", provider: "volces", baseURL: "https://ark.cn-beijing.volces.com/api/v3" },
+  { label: "OpenRouter", provider: "openrouter", baseURL: "https://openrouter.ai/api/v1" },
+  { label: "OpenAI 官方", provider: "openai", baseURL: "https://api.openai.com/v1" },
+  { label: "本地 Ollama", provider: "ollama", baseURL: "http://127.0.0.1:11434/v1", keyHint: "ollama" },
+  { label: "本地 LM Studio", provider: "lmstudio", baseURL: "http://127.0.0.1:1234/v1", keyHint: "lmstudio" },
+]
+function renderProviderPresets() {
+  $("amPresets").innerHTML = PROVIDER_PRESETS.map((p, i) =>
+    `<button type="button" data-i="${i}" style="background:var(--panel);border:1px solid var(--border);border-radius:14px;color:var(--text);font:inherit;font-size:12px;padding:4px 10px;cursor:pointer;">${esc(p.label)}</button>`).join("")
+  $("amPresets").querySelectorAll("button").forEach((b) => b.onclick = () => {
+    const p = PROVIDER_PRESETS[Number(b.dataset.i)]
+    if (!$("amProvider").value.trim()) $("amProvider").value = p.provider
+    $("amBaseURL").value = p.baseURL
+    if (p.keyHint && !$("amKey").value.trim()) $("amKey").value = p.keyHint
+    $("amKey").focus()
+  })
+}
 function openAddModelModal() {
   $("amErr").textContent = ""
   $("modalMask").classList.add("show")
+  renderProviderPresets()
   $("amProvider").focus()
 }
 function closeAddModelModal() { $("modalMask").classList.remove("show") }
