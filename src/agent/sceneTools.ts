@@ -208,56 +208,73 @@ export async function localComfyImage(prompt: string, size: string, outPath: str
   const dims = (size || "1024x1024").split(/[xX*×]/).map(Number)
   const w = Math.max(512, Math.round((dims[0] || 1024) / 32) * 32) // 宽高须为 32 的整数倍
   const h = Math.max(512, Math.round((dims[1] || 1024) / 32) * 32)
-  const workflow: Record<string, { class_type: string; inputs: Record<string, unknown> }> = {
-    "1": { class_type: "UnetLoaderGGUF", inputs: { unet_name: "qwen_image_2.1_Q4_K_M.gguf" } },
-    "2": { class_type: "CLIPLoader", inputs: { clip_name: "qwen3vl_8b_w4a8.safetensors", type: "qwen_image" } },
-    "3": { class_type: "VAELoader", inputs: { vae_name: "qwen_image_2.1_vae_bf16.safetensors" } },
-    "4": { class_type: "CLIPTextEncode", inputs: { text: prompt, clip: ["2", 0] } },
-    "5": { class_type: "EmptySD3LatentImage", inputs: { width: w, height: h, batch_size: 1 } },
-    // 官方 model_index.json 的 sample_sigmas，末尾补 0 = 9 值 8 步
-    "6": { class_type: "ManualSigmas", inputs: { sigmas: "1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0" } },
-    "7": { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } },
-    "8": { class_type: "SamplerCustom", inputs: {
-      model: ["1", 0], add_noise: true, noise_seed: Math.floor(Math.random() * 1e15),
-      cfg: 1.0, positive: ["4", 0], negative: ["4", 0], sampler: ["7", 0], sigmas: ["6", 0], latent_image: ["5", 0] } },
-    "9": { class_type: "VAEDecode", inputs: { samples: ["8", 0], vae: ["3", 0] } },
-    "10": { class_type: "SaveImage", inputs: { images: ["9", 0], filename_prefix: "yyagent" } },
-  }
-  const sub = (p: string, timeoutMs: number) =>
-    fetch(`${base}${p}`, { signal: AbortSignal.timeout(timeoutMs), ...p === "/prompt" ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow }) } : {} })
-  let r: Response
-  try {
-    r = await sub("/prompt", 15_000)
-  } catch (e) {
-    console.warn("[本地生图] 提交失败（ComfyUI 不可达？）:", (e as Error).message)
+  // T147 空图防御：偶发 seed 会产出纯色/空图（8-sigma 末步大跳 + 量化模型的数值抖动）。
+  // 启发式检测：正常图的 PNG 体积远大于纯色图（512² 正常 340KB+ vs 空图 ~10KB），
+  // 阈值取 w*h*0.3 字节；疑似空图自动换 seed 重试一次。
+  const BLANK_THRESHOLD = w * h * 0.3
+
+  const genOnce = async (seed: number): Promise<Buffer | null> => {
+    const workflow: Record<string, { class_type: string; inputs: Record<string, unknown> }> = {
+      "1": { class_type: "UnetLoaderGGUF", inputs: { unet_name: "qwen_image_2.1_Q4_K_M.gguf" } },
+      "2": { class_type: "CLIPLoader", inputs: { clip_name: "qwen3vl_8b_w4a8.safetensors", type: "qwen_image" } },
+      "3": { class_type: "VAELoader", inputs: { vae_name: "qwen_image_2.1_vae_bf16.safetensors" } },
+      "4": { class_type: "CLIPTextEncode", inputs: { text: prompt, clip: ["2", 0] } },
+      "5": { class_type: "EmptySD3LatentImage", inputs: { width: w, height: h, batch_size: 1 } },
+      // 官方 model_index.json 的 sample_sigmas，末尾补 0 = 9 值 8 步
+      "6": { class_type: "ManualSigmas", inputs: { sigmas: "1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0" } },
+      "7": { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } },
+      "8": { class_type: "SamplerCustom", inputs: {
+        model: ["1", 0], add_noise: true, noise_seed: seed,
+        cfg: 1.0, positive: ["4", 0], negative: ["4", 0], sampler: ["7", 0], sigmas: ["6", 0], latent_image: ["5", 0] } },
+      "9": { class_type: "VAEDecode", inputs: { samples: ["8", 0], vae: ["3", 0] } },
+      "10": { class_type: "SaveImage", inputs: { images: ["9", 0], filename_prefix: "yyagent" } },
+    }
+    const sub = (p: string, timeoutMs: number) =>
+      fetch(`${base}${p}`, { signal: AbortSignal.timeout(timeoutMs), ...p === "/prompt" ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow }) } : {} })
+    let r: Response
+    try {
+      r = await sub("/prompt", 15_000)
+    } catch (e) {
+      console.warn("[本地生图] 提交失败（ComfyUI 不可达？）:", (e as Error).message)
+      return null
+    }
+    if (!r.ok) { console.warn("[本地生图] 提交被拒: HTTP", r.status); return null }
+    const { prompt_id: pid } = (await r.json()) as { prompt_id?: string }
+    if (!pid) { console.warn("[本地生图] 提交响应无 prompt_id"); return null }
+    // 轮询最长 10 分钟：首次运行要加载 10GB 模型，很慢是正常的
+    for (let i = 0; i < 120; i++) {
+      await new Promise((res) => setTimeout(res, 5000))
+      try {
+        const rec = (await (await fetch(`${base}/history/${pid}`, { signal: AbortSignal.timeout(10_000) })).json())[pid] as
+          | { status?: { status_str?: string; messages?: unknown[] }; outputs?: Record<string, { images?: Array<{ filename: string; subfolder?: string }> }> }
+          | undefined
+        if (!rec) continue
+        if (rec.status?.status_str === "error") { console.warn("[本地生图] 工作流执行失败:", JSON.stringify(rec.status.messages?.slice(-1)).slice(0, 300)); return null }
+        const img = rec.outputs?.["10"]?.images?.[0]
+        if (img) {
+          const ab = await fetch(
+            `${base}/view?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(img.subfolder ?? "")}&type=output`,
+            { signal: AbortSignal.timeout(60_000) }).then((x) => x.arrayBuffer())
+          return Buffer.from(new Uint8Array(ab))
+        }
+      } catch { /* 轮询抖动继续 */ }
+    }
+    console.warn("[本地生图] 轮询 10 分钟超时")
     return null
   }
-  if (!r.ok) { console.warn("[本地生图] 提交被拒: HTTP", r.status); return null }
-  const { prompt_id: pid } = (await r.json()) as { prompt_id?: string }
-  if (!pid) { console.warn("[本地生图] 提交响应无 prompt_id"); return null }
-  // 轮询最长 10 分钟：首次运行要加载 10GB 模型，很慢是正常的
-  for (let i = 0; i < 120; i++) {
-    await new Promise((res) => setTimeout(res, 5000))
-    try {
-      const rec = (await (await fetch(`${base}/history/${pid}`, { signal: AbortSignal.timeout(10_000) })).json())[pid] as
-        | { status?: { status_str?: string; messages?: unknown[] }; outputs?: Record<string, { images?: Array<{ filename: string; subfolder?: string }> }> }
-        | undefined
-      if (!rec) continue
-      if (rec.status?.status_str === "error") { console.warn("[本地生图] 工作流执行失败:", JSON.stringify(rec.status.messages?.slice(-1)).slice(0, 300)); return null }
-      const img = rec.outputs?.["10"]?.images?.[0]
-      if (img) {
-        const ab = await fetch(
-          `${base}/view?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(img.subfolder ?? "")}&type=output`,
-          { signal: AbortSignal.timeout(60_000) }).then((x) => x.arrayBuffer())
-        const buf = Buffer.from(new Uint8Array(ab))
-        mkdirSync(resolve(outPath, ".."), { recursive: true })
-        writeFileSync(outPath, buf)
-        return `[本地生成] ${outPath}（${(buf.length / 1024).toFixed(0)} KB，ComfyUI · Qwen-Image-2.1-Turbo 本地，零 token）`
-      }
-    } catch { /* 轮询抖动继续 */ }
+
+  let buf: Buffer | null = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    buf = await genOnce(Math.floor(Math.random() * 1e15))
+    if (!buf) return null
+    if (buf.length >= BLANK_THRESHOLD) break
+    console.warn(`[本地生图] 疑似空图（PNG 仅 ${(buf.length / 1024).toFixed(0)} KB，阈值 ${(BLANK_THRESHOLD / 1024).toFixed(0)} KB）——换 seed 重试`)
   }
-  console.warn("[本地生图] 轮询 10 分钟超时")
-  return null
+  if (!buf) return null // 循环内 null 已提前返回
+  if (buf.length < BLANK_THRESHOLD) console.warn("[本地生图] 重试后仍疑似空图，按原样交付（可能是模型对该提示词的极端表现）")
+  mkdirSync(resolve(outPath, ".."), { recursive: true })
+  writeFileSync(outPath, buf)
+  return `[本地生成] ${outPath}（${(buf.length / 1024).toFixed(0)} KB，ComfyUI · Qwen-Image-2.1-Turbo 本地，零 token）`
 }
 
 export const imggenTool = tool({
