@@ -418,7 +418,8 @@
   .msg.assistant .who { color: var(--accent); }
   .msg.user .who::before { content: "▎"; }
   .msg.assistant .who::before { content: "▎"; }
-  .amsg .abody, .msg .body { white-space: pre-wrap; word-break: break-word; }
+  .amsg .abody, .msg .body { white-space: pre-wrap; word-break: break-word; font-weight: 500; } /* T150：雅黑 regular 偏细，正文提到 500 */
+  .msg .bubble { font-weight: 500; }
   /* assistant 正文行内 Markdown：加粗强调、行内代码浅底色块 */
   .amsg.assistant .abody strong, .msg.assistant .body strong { font-weight: 700; color: var(--text); }
   .amsg.assistant .abody code, .msg.assistant .body code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px; background: var(--panel2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; white-space: pre-wrap; }
@@ -2670,6 +2671,16 @@ function render() {
   renderTasks()
   // 消息区
   const box = $("messages")
+  // T150 消息区签名跳过：轮询每 3 秒触发一次 render()，全量 innerHTML 重建会冲掉用户的
+  // 文字选区和思考块展开动画（表现为「选中就没选中了」「思考点开就收回」）。
+  // 数据签名没变（消息/流式状态/流状态文本/提问卡/查看全部/steps 展开集/older 总数）
+  // 就整体跳过消息区重绘——其余 UI（侧栏/设置等）照常刷新。
+  const msgSig = JSON.stringify([
+    messages, streamingOn, streamStatusText, question,
+    window.__showAllMsgs ?? 0, [...(window.__stepsOpen ?? [])], olderTotal,
+  ])
+  if (window.__lastMsgSig === msgSig) return
+  window.__lastMsgSig = msgSig
   // P1-7 智能滚动：仅当原本在底部附近才跟随；否则保持位置
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80
   if (!messages.length && !streamingOn) { box.innerHTML = `<div class="empty">开始新对话：直接输入任务</div>` }

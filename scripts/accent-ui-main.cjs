@@ -209,6 +209,30 @@ app.whenReady().then(async () => {
     const uc = $("#usageCharts")
     push("设置页用量卡内容", !!uc, uc ? uc.textContent.trim().slice(0, 60) : "null")
     push("用量图已渲染（非占位）", !!uc && uc.innerHTML.includes("flip-card"), uc ? uc.textContent.trim().slice(0, 60) : "")
+    // 14 T150：msgSig 跳过重绘的回归——思考展开跨轮询保持 + 文字选区保持
+    messages.push({ ts: 900, role: "assistant", content: "<thinking>测试思考内容 abcdefg 12345</thinking>这是正文回答内容用于选中测试" })
+    render()
+    const head = document.querySelector("#messages .think-head")
+    push("构造出思考块", !!head)
+    if (head) {
+      head.click()
+      const open1 = document.querySelector("#messages .think-block").classList.contains("open")
+      await new Promise((r) => setTimeout(r, 4000)) // 跨过 3 秒轮询的 render()
+      const open2 = document.querySelector("#messages .think-block").classList.contains("open")
+      push("思考展开跨轮询保持", open1 && open2, open1 + "/" + open2)
+      const body = document.querySelector("#messages .msg .body")
+      const range = document.createRange()
+      range.selectNodeContents(body)
+      const sel = window.getSelection()
+      sel.removeAllRanges()
+      sel.addRange(range)
+      await new Promise((r) => setTimeout(r, 4000))
+      push("文字选区跨轮询保持", window.getSelection().toString().includes("正文回答"), window.getSelection().toString().slice(0, 30))
+      const fw = getComputedStyle(body).fontWeight
+      push("正文字重 500", fw === "500", fw)
+    }
+    messages.pop()
+    render()
     return JSON.stringify(out)
   }
   const script = `(async () => { try { return await (${assertFn.toString()})() } catch (e) { return JSON.stringify([["脚本异常", false, e && e.stack ? String(e.stack).split("\\n").slice(0, 4).join(" | ") : String(e)]]) } })()`
