@@ -3628,6 +3628,7 @@ function openSession(id, jumpIdx) {
   $("cwdLabel").title = meta ? (meta.noProject ? "自由会话（不绑定项目目录，工作目录为用户主目录）" : `工作区（不可更改）：${meta.cwd}`) : ""
   renderCwdFooter(meta?.cwd)
   renderUsageStat(meta?.usage)
+  renderCtx(meta?.ctxPct ?? 0) // T145：切会话/新建时红绿灯按该会话的 ctxPct 重置（新会话 0%，不再残留上一个会话的占用）
   // P0-3：先取最近一页，服务端有多少条全量记录在 total 里
   fetch(`/api/sessions/${id}/messages?limit=100`).then((r) => r.json()).then(async (f) => {
     messages = f.messages ?? []
@@ -4005,8 +4006,8 @@ function connect() {
         // 不重置 streamingOn，否则占位块闪一下就被冲掉，模型开吐前一片空白
         // T55：system（模型切换提示）同 user——流式中切模型不冲掉流式占位
         if (m.message.role !== "user" && m.message.role !== "system") { streamingOn = false; streamBuf = ""; window.__steps = []; window.__actOpen = -1 }
-        if (m.ctxPct != null) renderCtx(m.ctxPct)
-        if (m.usage) { renderUsageStat(m.usage); const s = sessions.find((x) => x.id === m.sessionId); if (s) s.usage = m.usage }
+        if (m.ctxPct != null && m.sessionId === activeId) renderCtx(m.ctxPct) // T145：红绿灯只反映当前会话
+        if (m.usage) { if (m.sessionId === activeId) renderUsageStat(m.usage); const s = sessions.find((x) => x.id === m.sessionId); if (s) s.usage = m.usage }
       }
       loadSessions()
     }
@@ -4036,7 +4037,7 @@ function connect() {
       closeCtxPop()
       if (m.sessionId === activeId) openSession(m.sessionId)
       loadSessions()
-      renderCtx(m.ctxPct ?? 0)
+      if (m.sessionId === activeId) renderCtx(m.ctxPct ?? 0) // T145：红绿灯只反映当前会话
     }
     else if (m.type === "reload") {
       // P2-2 撤回/编辑后服务端截断了消息：重载当前会话 + 侧栏计数
