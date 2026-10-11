@@ -402,6 +402,9 @@
   #todoTitle { font-size: 12.5px; font-weight: 600; color: var(--text); }
   #todoCount { font-size: 12px; color: var(--dim); }
   #todoToggle { margin-left: auto; background: none; border: none; color: var(--dim); cursor: pointer; font-size: 12px; transition: transform .15s; }
+  /* T156 关闭按钮：与 chevron 同为无框小钮，hover 给底色不抢进度条信息 */
+  #todoClose { flex-shrink: 0; background: none; border: none; color: var(--dim); cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 4px; font-family: inherit; transition: background .15s, color .15s; }
+  #todoClose:hover { background: var(--border); color: var(--text); }
   #todoProg { height: 4px; background: var(--border); border-radius: 2px; margin-top: 6px; overflow: hidden; }
   #todoFill { height: 100%; width: 0; background: var(--user); border-radius: 2px; transition: width .3s; }
   #todoItems { display: none; margin-top: 8px; max-height: 300px; overflow-y: auto; } /* 展开过长时内部滚动，浮层不无限高 */
@@ -1135,6 +1138,8 @@
             <span id="todoTitle">任务进度</span>
             <span id="todoCount"></span>
             <button id="todoToggle" title="展开/收起"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <!-- T156 右上角关闭：本次任务周期内不再弹出，下个任务周期自动恢复 -->
+            <button id="todoClose" title="关闭进度条">×</button>
           </div>
           <div id="todoProg"><div id="todoFill"></div></div>
           <div id="todoItems"></div>
@@ -3809,9 +3814,15 @@ async function refreshState() {
 let todoExpanded = false
 let todoHideTimer = null // 任务结束后延迟隐藏
 let todoShownForBusy = false // 本次 busy 周期是否显示过
+let todoDismissed = null // T156 点了关闭的会话 id（null=没关）：只压住那个会话的当前任务周期
+let todoWasBusy = false // 上次渲染的 busy：false→true 即新任务周期，解除关闭
+// T156 关闭态不给 "show"（卡片整体不弹）；expanded 与显隐正交，收起/展开状态跨周期保留
+const todoCls = () => [todoDismissed === activeId ? "" : "show", todoExpanded ? "expanded" : ""].filter(Boolean).join(" ")
 function renderTodoBar(todo, isBusy) {
   const bar = $("todoBar")
   const has = todo?.length > 0
+  if (isBusy && !todoWasBusy) todoDismissed = null // 新任务周期：上次的「关闭」不延续
+  todoWasBusy = isBusy
   if (isBusy && has) {
     // 任务进行中：正常显示；取消任何延迟隐藏
     if (todoHideTimer) { clearTimeout(todoHideTimer); todoHideTimer = null }
@@ -3822,7 +3833,7 @@ function renderTodoBar(todo, isBusy) {
       todoHideTimer = setTimeout(() => {
         todoHideTimer = null
         todoShownForBusy = false
-        bar.className = todoExpanded ? "show expanded" : "show"
+        bar.className = todoCls()
       }, 10_000)
     }
   } else if (!todoShownForBusy && !has) {
@@ -3830,6 +3841,7 @@ function renderTodoBar(todo, isBusy) {
     bar.className = todoExpanded ? "expanded" : ""
     return
   }
+  if (todoDismissed === activeId) { bar.className = todoCls(); return } // T156 关闭期间不弹、不更新内容
   if (!has) return // 展示期末尾 todo 可能已被清空，保持现状等隐藏
   const done = todo.filter((t) => t.status === "done").length
   const doing = todo.some((t) => t.status === "in_progress")
@@ -3839,11 +3851,17 @@ function renderTodoBar(todo, isBusy) {
   const ICO = { done: "✓", in_progress: "◐", pending: "○" }
   $("todoItems").innerHTML = todo.map((t) =>
     `<div class="ti ${t.status}"><span class="ico">${ICO[t.status] ?? "○"}</span><span>${esc(t.content)}</span></div>`).join("")
-  bar.className = todoExpanded ? "show expanded" : "show"
+  bar.className = todoCls()
 }
 $("todoHead").onclick = () => {
   todoExpanded = !todoExpanded
   $("todoBar").classList.toggle("expanded", todoExpanded)
+}
+// T156 右上角关闭：只压住当前会话的本次任务周期；必须 stopPropagation，否则冒泡到 todoHead 变成「展开/收起」
+$("todoClose").onclick = (e) => {
+  e.stopPropagation()
+  todoDismissed = activeId
+  $("todoBar").className = todoCls()
 }
 
 // ---- P0-4 活动流（streaming 块内逐行状态，点击展开可滚动卡片） ----

@@ -53,8 +53,10 @@ ok('CSS：preserve-3d + backface-visibility + rotateX(180deg)',
 ok('翻面按钮点击 toggle .flipped', /classList\.toggle\("flipped"\)/.test(script))
 
 console.log('=== ④ todo 任务卡片常驻可展开 ===')
-ok('语义：全部完成后 10s 收拢为摘要条（不再整体消失）',
-  /bar\.className = todoExpanded \? "show expanded" : "show"/.test(script))
+// T156：收拢/展开的显隐统一走 todoCls()——默认仍给 "show"（摘要条常驻，不整体消失），
+// 仅「用户点了关闭且仍是那个会话」才不给 show
+ok('语义：全部完成后 10s 收拢为摘要条（不再整体消失；T156 关闭态例外）',
+  /bar\.className = todoCls\(\)/.test(script) && /todoDismissed === activeId \? "" : "show"/.test(script))
 ok('空闲无任务才隐藏', /!todoShownForBusy && !has/.test(script))
 // 反向：todoToggle 的 ▾ 文本字形换成 chevron SVG（范围限定 todoBar，别处下拉箭头不连坐）
 const todoToggle = html.match(/<button id="todoToggle"[\s\S]*?<\/button>/)?.[0] ?? ""

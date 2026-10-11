@@ -48,3 +48,4 @@
 | T132 | 2026-10-07 | 主题色 CSS 类二次根治 + 思考块间距渲染端根治 + Electron UI probe（19 断言） | 二十二 |
 | T141 | 2026-10-10 | 权限门绕过收口（解释器内联求值判危险 / 危险优先于白名单 / 连接符禁前缀 / 凭据正则补 i 与词边界）+ 入口层回归 | 二十三 |
 | T155 | 2026-10-11 | 浮层卡片栈（floatStack）：banner/cpBar/todoBar/queueInfo/queueList 统一悬浮白卡，banner 显示机制 class 化（弃 inline style） | 二十三 |
+| T156 | 2026-10-11 | todoBar 右上角关闭按钮：点关闭只压住当前会话本次任务周期（stopPropagation 不误触展开/收起，expanded 状态保留），新任务周期自动恢复 | 二十三 |

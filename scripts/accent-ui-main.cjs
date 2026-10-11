@@ -289,6 +289,29 @@ app.whenReady().then(async () => {
     $("#queueInfo").classList.remove("show"); $("#queueInfo").textContent = ""
     $("#queueList").classList.remove("show"); $("#queueList").innerHTML = ""
     $("#todoHead").click() // 收起还原
+    // 16.7 T156：todoBar 右上角关闭按钮——点关闭只压住当前会话的本次任务周期；
+    // 不误触 todoHead 的展开/收起，新任务周期自动恢复弹出
+    const todoBarEl = $("#todoBar"), closeBtn = $("#todoClose"), toggleBtn = $("#todoToggle")
+    push("关闭钮在 todoHead 内（右上角）", closeBtn.closest("#todoHead") !== null && toggleBtn.closest("#todoHead") !== null)
+    const cbR = closeBtn.getBoundingClientRect(), tbR = toggleBtn.getBoundingClientRect(), cardR = todoBarEl.getBoundingClientRect()
+    push("关闭钮在 chevron 右侧、卡片内不溢出", cbR.left >= tbR.right - 1 && cbR.right <= cardR.right && cbR.width >= 12, Math.round(cbR.left) + ">" + Math.round(tbR.right) + " w=" + Math.round(cbR.width))
+    const expBefore = todoBarEl.className.includes("expanded")
+    closeBtn.click()
+    push("点击关闭 → 卡片隐藏", !todoBarEl.className.includes("show") && getComputedStyle(todoBarEl).display === "none", todoBarEl.className)
+    push("点击关闭不误触展开/收起（expanded 不变）", todoBarEl.className.includes("expanded") === expBefore, todoBarEl.className)
+    renderTodoBar([{ content: "同周期继续推进", status: "in_progress" }], true)
+    push("同任务周期再渲染仍保持隐藏", !todoBarEl.className.includes("show"), todoBarEl.className)
+    renderTodoBar([], false) // busy 落下 → 下一个 busy 判定为新周期
+    renderTodoBar([{ content: "新一轮任务", status: "in_progress" }], true)
+    push("新任务周期恢复弹出", todoBarEl.className.includes("show"), todoBarEl.className)
+    $("#todoHead").click() // 展开
+    closeBtn.click()
+    push("展开态点关闭：隐藏且保留 expanded", !todoBarEl.className.includes("show") && todoBarEl.className.includes("expanded"), todoBarEl.className)
+    // 还原：清定时器与全部关闭态标志，避免污染后续断言
+    if (todoHideTimer) { clearTimeout(todoHideTimer); todoHideTimer = null }
+    todoShownForBusy = false; todoDismissed = null; todoWasBusy = false; todoExpanded = false
+    renderTodoBar([], false)
+    push("还原默认态（隐藏）", todoBarEl.className === "", todoBarEl.className)
     messages.pop()
     render()
     // 16 T149：点图片卡片时右侧栏没开 → 自动打开抽屉 + 预览显示
