@@ -8,6 +8,8 @@
 import { z } from "zod"
 import { tool, type Tool } from "ai"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { spawn } from "node:child_process"
+import { homedir } from "node:os"
 import { join, resolve, extname } from "node:path"
 import { loadConfig } from "./config.js"
 import { gateFileWrite } from "./permissions.js"
@@ -191,6 +193,15 @@ export const docxWriteTool = tool({
  * "其它调度未经评估"，simple 均匀摊开会让小字/细节崩，实测文字正确率天差地别）。
  * 成功返回结果文本，任何一步失败返回 null（调用方回落云端 API 通道）。
  */
+export async function comfyAlive(base: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${base}/system_stats`, { signal: AbortSignal.timeout(3000) })
+    return r.ok
+  } catch {
+    return false
+  }
+}
+
 export async function localComfyImage(prompt: string, size: string, outPath: string): Promise<string | null> {
   const cfg = loadConfig()
   const base = (cfg.localImageGen?.url || "http://127.0.0.1:8188").replace(/\/+$/, "")
@@ -214,19 +225,25 @@ export async function localComfyImage(prompt: string, size: string, outPath: str
   }
   const sub = (p: string, timeoutMs: number) =>
     fetch(`${base}${p}`, { signal: AbortSignal.timeout(timeoutMs), ...p === "/prompt" ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow }) } : {} })
-  const r = await sub("/prompt", 15_000)
-  if (!r.ok) return null
+  let r: Response
+  try {
+    r = await sub("/prompt", 15_000)
+  } catch (e) {
+    console.warn("[本地生图] 提交失败（ComfyUI 不可达？）:", (e as Error).message)
+    return null
+  }
+  if (!r.ok) { console.warn("[本地生图] 提交被拒: HTTP", r.status); return null }
   const { prompt_id: pid } = (await r.json()) as { prompt_id?: string }
-  if (!pid) return null
+  if (!pid) { console.warn("[本地生图] 提交响应无 prompt_id"); return null }
   // 轮询最长 10 分钟：首次运行要加载 10GB 模型，很慢是正常的
   for (let i = 0; i < 120; i++) {
     await new Promise((res) => setTimeout(res, 5000))
     try {
       const rec = (await (await fetch(`${base}/history/${pid}`, { signal: AbortSignal.timeout(10_000) })).json())[pid] as
-        | { status?: { status_str?: string }; outputs?: Record<string, { images?: Array<{ filename: string; subfolder?: string }> }> }
+        | { status?: { status_str?: string; messages?: unknown[] }; outputs?: Record<string, { images?: Array<{ filename: string; subfolder?: string }> }> }
         | undefined
       if (!rec) continue
-      if (rec.status?.status_str === "error") return null
+      if (rec.status?.status_str === "error") { console.warn("[本地生图] 工作流执行失败:", JSON.stringify(rec.status.messages?.slice(-1)).slice(0, 300)); return null }
       const img = rec.outputs?.["10"]?.images?.[0]
       if (img) {
         const ab = await fetch(
@@ -239,6 +256,7 @@ export async function localComfyImage(prompt: string, size: string, outPath: str
       }
     } catch { /* 轮询抖动继续 */ }
   }
+  console.warn("[本地生图] 轮询 10 分钟超时")
   return null
 }
 
@@ -270,12 +288,27 @@ export const imggenTool = tool({
     const outPath = resolve(currentCwd(), filename || `generated-${Date.now()}.png`)
     const denied = await gateWrite("imggen", outPath)
     if (denied) return denied
-    // T141：本地 ComfyUI 通道优先——enabled 且可达时零 token 出图，失败自动回落云端 API
+    // T141：本地 ComfyUI 通道优先——enabled 且可达时零 token 出图，失败自动回落云端 API。
+    // 服务没跑时自动拉起（默认装在 ~/Documents/ComfyUI，可用 localImageGen.dir 指定），
+    // 等就绪最长 90 秒；拉不起/超时走云端。
     if (cfg.localImageGen?.enabled) {
       try {
+        const base = (cfg.localImageGen.url || "http://127.0.0.1:8188").replace(/\/+$/, "")
+        if (!(await comfyAlive(base))) {
+          const comfyDir = cfg.localImageGen.dir || join(homedir(), "Documents", "ComfyUI")
+          const py = join(comfyDir, ".venv", "Scripts", "python.exe")
+          if (existsSync(py)) {
+            spawn(py, ["main.py", "--port", new URL(base).port || "8188"], { cwd: comfyDir, detached: true, stdio: "ignore" }).unref()
+            for (let i = 0; i < 30 && !(await comfyAlive(base)); i++) await new Promise((res) => setTimeout(res, 3000))
+          } else {
+            console.warn("[本地生图] ComfyUI 未运行且未找到", py, "——回落云端")
+          }
+        }
         const local = await localComfyImage(prompt, size || "1024x1024", outPath)
         if (local) return local
-      } catch { /* 本地不可用，继续走云端 */ }
+      } catch (e) {
+        console.warn("[本地生图] 本地通道异常，回落云端:", (e as Error).message)
+      }
     }
     const errors: string[] = []
     for (const [name, pv] of order) {
