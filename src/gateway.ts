@@ -1468,7 +1468,16 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   }
   if (m === "POST" && p === "/api/sessions") {
     const body = JSON.parse((await readBody(req)) || "{}")
-    // P1-5 工作区：新建会话必须选定工作目录（生成文件放这里），创建后不可改
+    // P1-5 工作区：新建会话必须选定工作目录（生成文件放这里），创建后不可改。
+    // T144：body.cwd 传空串 = 自由会话（不绑定项目文件夹）——实际工作目录落用户主目录，
+    // meta.noProject 标记（侧栏独立分组、顶栏不显示项目名）。
+    if (body.cwd === "") {
+      const meta = createSession(homedir(), body.model, body.title)
+      meta.noProject = true
+      persist(meta, [])
+      if (body.model) sessionsModelOverride.set(meta.id, body.model)
+      return json(res, 200, meta)
+    }
     const cwd = String(body.cwd ?? process.cwd())
     if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
       return json(res, 400, { error: `工作目录不存在: ${cwd}` })

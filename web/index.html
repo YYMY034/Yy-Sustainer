@@ -2579,7 +2579,7 @@ function render() {
   const projectSessions = sessions.filter((s) => !isConfigSession(s))
   const groups = new Map()
   for (const s of projectSessions) {
-    const key = s.cwd || "(未知)"
+    const key = s.noProject ? "自由会话" : (s.cwd || "(未知)") // T144：自由会话独立分组
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push(s)
   }
@@ -2591,7 +2591,7 @@ function render() {
     const collapsed = expandedCwds[cwd] === true
     const name = cwd.split(/[\\/]/).filter(Boolean).pop() || cwd
     return `<div class="cwd-group ${collapsed ? "collapsed" : ""}" data-cwd="${esc(cwd)}">
-      <div class="cwd-head" title="${esc(cwd)}"><span class="cico"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="display:block"><path d="M1.8 4.2c0-.77.62-1.4 1.4-1.4h3l1.5 1.7h5.1c.78 0 1.4.63 1.4 1.4v6.9c0 .78-.62 1.4-1.4 1.4H3.2a1.4 1.4 0 01-1.4-1.4V4.2z" fill="#f6c356"/></svg></span><span class="cname">${esc(name)}</span><span class="cnt">${list.length}</span><span class="chev">▾</span></div>
+      <div class="cwd-head" title="${esc(cwd === "自由会话" ? "不绑定项目目录的会话（工作目录为用户主目录）" : cwd)}"><span class="cico"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="display:block"><path d="M1.8 4.2c0-.77.62-1.4 1.4-1.4h3l1.5 1.7h5.1c.78 0 1.4.63 1.4 1.4v6.9c0 .78-.62 1.4-1.4 1.4H3.2a1.4 1.4 0 01-1.4-1.4V4.2z" fill="#f6c356"/></svg></span><span class="cname">${esc(name)}</span><span class="cnt">${list.length}</span><span class="chev">▾</span></div>
       ${list.map((s) => sessRow(s)).join("")}
     </div>`
   }).join("")
@@ -3624,8 +3624,8 @@ function openSession(id, jumpIdx) {
   restoreSideState()
   // P1-5：顶栏显示当前会话工作区（不可改，鼠标悬停看全路径）
   const meta = sessions.find((s) => s.id === id)
-  $("cwdLabel").textContent = meta?.cwd ? meta.cwd.split(/[\\/]/).filter(Boolean).pop() : ""
-  $("cwdLabel").title = meta?.cwd ? `工作区（不可更改）：${meta.cwd}` : ""
+  $("cwdLabel").textContent = meta ? (meta.noProject ? "自由会话" : meta.cwd.split(/[\\/]/).filter(Boolean).pop() || "") : ""
+  $("cwdLabel").title = meta ? (meta.noProject ? "自由会话（不绑定项目目录，工作目录为用户主目录）" : `工作区（不可更改）：${meta.cwd}`) : ""
   renderCwdFooter(meta?.cwd)
   renderUsageStat(meta?.usage)
   // P0-3：先取最近一页，服务端有多少条全量记录在 total 里
@@ -4183,15 +4183,17 @@ async function openCwdPop() {
   try {
     cwdCache = (await (await fetch("/api/cwds")).json()).cwds ?? []
   } catch { cwdCache = [] }
-  $("cwdList").innerHTML = cwdCache.length
+  // T144：顶部固定一项「不使用文件夹」= 自由会话（工作目录落用户主目录，不绑项目）
+  const freeItem = `<div class="cwd-item" data-path="" style="border-bottom:1px solid var(--border);margin-bottom:6px;padding-bottom:8px;"><span></span><span class="nm">不使用文件夹（自由会话）</span><span class="pth">不绑定项目目录</span></div>`
+  $("cwdList").innerHTML = freeItem + (cwdCache.length
     ? cwdCache.map((c) => `<div class="cwd-item" data-path="${esc(c.path)}"><span></span><span class="nm">${esc(c.name)}</span><span class="pth">${esc(c.path)}</span></div>`).join("")
-    : `<div style="font-size:12px;color:var(--dim);padding:4px 0;">暂无历史目录，用下方按钮选择文件夹</div>`
+    : `<div style="font-size:12px;color:var(--dim);padding:4px 0;">暂无历史目录，用下方按钮选择文件夹</div>`)
   pop.querySelectorAll(".cwd-item").forEach((el) => el.onclick = () => createSessionWithCwd(el.dataset.path))
   $("cwdCustom").focus()
 }
 async function createSessionWithCwd(cwd) {
   const cwdTrim = String(cwd ?? "").trim()
-  if (!cwdTrim) { $("cwdCustom").focus(); return }
+  if (!cwdTrim && cwd !== "") { $("cwdCustom").focus(); return } // 显式传空串 = 自由会话（T144）
   try {
     const r = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: cwdTrim }) })
     if (!r.ok) { const e = await r.json(); $("banner").style.display = "block"; $("banner").textContent = `创建失败：${e.error ?? r.status}`; return }
@@ -4204,8 +4206,9 @@ async function createSessionWithCwd(cwd) {
 $("btnNew").onclick = openCwdPop
 // D2 顶栏新建对话：当前会话有工作区就直接沿用该目录建（免选），没有则弹工作区选择
 $("newChatBtn").onclick = async () => {
-  const cwd = sessions.find((s) => s.id === activeId)?.cwd
-  if (cwd) {
+  const cur = sessions.find((s) => s.id === activeId)
+  const cwd = cur?.noProject ? "" : cur?.cwd
+  if (cwd !== undefined) {
     try {
       const r = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd }) })
       if (r.ok) { const meta = await r.json(); await loadSessions(); openSession(meta.id); $("input").focus(); return }

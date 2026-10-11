@@ -39,3 +39,4 @@ release-repair/
 
 # ---- 打包产物（同 release/）----
 release-new/
+generated-*.png

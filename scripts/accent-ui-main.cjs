@@ -190,6 +190,19 @@ app.whenReady().then(async () => {
     sessions.pop()
     activeId = null
     render()
+    // 12 T144：自由会话（不使用文件夹）——空 cwd 创建 → 独立分组 + 顶栏显示
+    const fr = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: "" }) })
+    const fmeta = await fr.json()
+    push("空 cwd 创建会话成功", fr.ok && !!fmeta.id, JSON.stringify(fmeta).slice(0, 80))
+    push("自由会话 cwd=主目录 + noProject", !!fmeta.noProject && String(fmeta.cwd).toLowerCase().includes("users"), fmeta.cwd)
+    await loadSessions()
+    render()
+    push("侧栏出现「自由会话」分组", $("#sessionList").innerHTML.includes("自由会话"))
+    await openSession(fmeta.id)
+    push("顶栏显示自由会话", $("#cwdLabel").textContent === "自由会话", $("#cwdLabel").textContent)
+    // 清理：删掉这个测试会话
+    await fetch(`/api/sessions/${fmeta.id}`, { method: "DELETE" })
+    await loadSessions()
     return JSON.stringify(out)
   }
   const script = `(async () => { try { return await (${assertFn.toString()})() } catch (e) { return JSON.stringify([["脚本异常", false, e && e.stack ? String(e.stack).split("\\n").slice(0, 4).join(" | ") : String(e)]]) } })()`

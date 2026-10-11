@@ -24,6 +24,8 @@ export interface SessionMeta {
    * 和 gateway 内存 Set（重启即失效）。合并成这一份，两处入口（Web/TUI）读写同一个字段。
    */
   longTask?: boolean
+  /** T144 自由会话：不绑定项目文件夹（cwd 落在用户主目录），侧栏独立分组显示 */
+  noProject?: boolean
   /**
    * T93 上一轮真实输入的 token 数（含系统提示 + 工具定义 + 消息框架）。
    * 压缩判定用它做下限：只数消息正文会漏掉系统提示与工具定义的开销，导致压得太晚。
