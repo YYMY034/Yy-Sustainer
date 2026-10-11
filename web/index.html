@@ -1501,8 +1501,6 @@
             <button class="ms-btn" id="setVisionBtn"><span id="setVisionLabel">（不设置）</span><span class="chev">▾</span></button>
           </div>
         </div>
-        
-        </div>
         <div class="set-row" style="border-bottom:none;">
           <div class="sl">默认生图模型<div class="sd">imggen 生成图片时优先使用的模型通道（需服务商支持 images/generations 接口，如通义万相、DALL·E 兼容接口）；留空 = 自动遍历所有通道尝试。开启下方本地生图后此项作为回落</div></div>
           <div class="model-select">
@@ -3212,7 +3210,7 @@ function bindMediaEvents() {
     el.onclick = (e) => {
       if (e.target.closest(".fc-dl") || e.target.closest(".fc-browser") || e.target.closest(".fc-folder")) return
       const p = el.dataset.path
-      if (el.dataset.isimg === "1") openImageViewer(`/api/file?p=${encodeURIComponent(p)}`, p.split(/[\\/]/).pop())
+      if (el.dataset.isimg === "1") openPreview(absPathFor(p), p.split(/[\\/]/).pop())
       else downloadFile(p)
     }
   })
