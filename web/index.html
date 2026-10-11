@@ -3538,6 +3538,7 @@ function usageDonut(mu) {
   const models = mu?.models ?? []
   const grand = mu?.grand
   if (!models.length || !grand?.total) return `<div class="ch-head"><span class="ch-title">每日模型累计用量</span></div><div class="ch-empty">还没有用量数据 —— 完成一次对话后这里会按模型累计。</div>`
+  const cc = chartColors() // T150：T130 改色时漏了这行——环形图引用 cc 却未声明，有真实用量数据时渲染必炸（表现为永远停在占位）
   // 只画前 7 个模型，其余并成「其他」，图例不至于无限长
   const list = models.slice(0, 7)
   const restTotal = models.slice(7).reduce((a, m) => a + m.total, 0)
