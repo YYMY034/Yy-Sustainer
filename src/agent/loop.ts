@@ -64,6 +64,8 @@ export interface AgentOptions {
   onStep?: (info: StepProgress) => void
   /** T93：上一轮真实输入 token（含系统提示 + 工具定义）。压缩判定用它做下限，避免只数正文而压得太晚 */
   lastInputTokens?: number
+  /** T153：内部单一职责调用（监工质检/钩子等）→ reasoning 强制 low 档 + 不注入记忆索引。主对话不设。 */
+  internalCheap?: boolean
 }
 
 /**
@@ -507,8 +509,8 @@ async function prepare(
     // T115：内部单一职责调用（compactBase：拆分器等）→ reasoning 降 low 档；主对话不设限
     // T129：每模型推理档位（模型选择器悬停卡片写入 cfg.modelReasoning），
     //       兜底链：per-model → 设置页全局（ui.reasoningEffort / 顶层）→ 服务端默认
-    ...(opts.compactBase
-      ? { providerOptions: internalProviderOptions(providerName) }
+    ...(opts.compactBase || opts.internalCheap
+      ? { providerOptions: internalProviderOptions(providerName) } // T153：internalCheap = 质检等内部单一职责调用（无需深思考，low 档省 token 提速度）
       : (() => {
           const spec = `${providerName}/${modelId}`
           const perModel = config.modelReasoning?.[spec]

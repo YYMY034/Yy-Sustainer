@@ -175,7 +175,7 @@ function brokerOf(sessionId: string): QuestionBroker {
 const anyBusySessionId = (): string | null => [...sessionBusy][0] ?? null
 // F1：前端当前打开的会话（由 /api/state?sid= 上报），statePayload 按它返回会话级模型
 let stateActiveSid: string | null = null
-type QueueItem = { id: number; sessionId: string; text: string; imagesBase64?: string[]; imagesDataUrl?: string[] }
+type QueueItem = { id: number; sessionId: string; text: string; imagesBase64?: string[]; imagesDataUrl?: string[]; fromAssist?: boolean }
 let queueSeq = 0 // 排队条目自增 id（前端「立即发送/编辑」按 id 定位）
 const sessionsModelOverride = new Map<string, string>() // 会话级模型（对齐 TUI：会话 model 优先）
 const wsClients = new Set<WebSocket>()
@@ -375,7 +375,7 @@ async function runDaemonTask(t: DaemonTask): Promise<void> {
 }
 
 // ---- 核心：跑一个流式任务（对齐 TUI send() 语义：重试、步骤、落盘、错误消息） ----
-async function runTurn(sessionId: string, text: string, imagesBase64?: string[], imagesDataUrl?: string[]): Promise<void> {
+async function runTurn(sessionId: string, text: string, imagesBase64?: string[], imagesDataUrl?: string[], opts?: { fromAssist?: boolean }): Promise<void> {
   const t0turn = Date.now() // T85：完成通知只发「耗时较长」的回合，避免每轮骚扰
   const file = loadSession(sessionId)
   if (!file) {
@@ -882,8 +882,14 @@ async function runTurn(sessionId: string, text: string, imagesBase64?: string[],
     releaseRunSlot() // T119：归还全局并发位（等待者按序唤醒）
     broadcast({ type: "busy", busy: false, sessionId }) // F4：带 sessionId，前端收掉对应会话的转圈
     broadcast({ type: "status", sessionId, text: "" })
-    // 监工模式（config.watch，与 TUI 一致）：主任务完成后自动调辅助对话检查，    // 辅助发现的遗漏/新需求经 SEND 协议自动回主对话队列执行
-    if (!aborted && r?.text && loadConfig().watch) void assistReviewTurn(text, r.text, sessionId)
+    // 监工模式（config.watch，与 TUI 一致）：主任务完成后自动调辅助对话检查，
+    // 辅助发现的遗漏/新需求经 SEND 协议自动回主对话队列执行。
+    // T153 三个触发闸：① SEND 来的任务完成不再质检（防监工↔主对话无限回环）
+    // ② 琐碎回合跳过（无工具步骤且报告 <80 字——「谢谢」「好的」不值得一轮质检）
+    if (!aborted && r?.text && loadConfig().watch && !opts?.fromAssist) {
+      const substantive = (r.steps ?? 0) >= 2 || (r.text || "").length >= 80
+      if (substantive) void assistReviewTurn(text, r.text, sessionId)
+    }
   }
 }
 
@@ -906,7 +912,8 @@ async function assistReviewTurn(userTask: string, report: string, sessionId?: st
         model: loadConfig().model,
         cwd: loadSession(sid)?.meta.cwd ?? lastSessionCwd(),
         system: "你是 Yy Sustainer 的监工/质检子智能体。只读检查，绝不修改文件。发现遗漏或后续需求时，输出一行以 SEND: 开头的精简指令（将自动发给主对话执行）；无问题只输出 OK。",
-        maxSteps: 12,
+        maxSteps: 8,
+        internalCheap: true, // T153：内部单一职责调用（质检）→ reasoning 强制 low 档
       },
     )
     // 质检结论显示在该会话的辅助对话面板（含 SEND 指令的解析入队）
@@ -1054,7 +1061,7 @@ function pumpQueue(): void {
     if (!q.length || sessionBusy.has(sid)) continue
     const next = q.shift()!
     broadcastQueue()
-    void runTurn(next.sessionId, next.text, next.imagesBase64, next.imagesDataUrl).finally(pumpQueue)
+    void runTurn(next.sessionId, next.text, next.imagesBase64, next.imagesDataUrl, { fromAssist: next.fromAssist }).finally(pumpQueue)
   }
 }
 
@@ -1136,7 +1143,7 @@ function enqueueFromAssist(reply: string, targetSid?: string): number {
   for (const line of sends) {
     const task = line.replace(/^SEND:\s*/, "").trim()
     if (!task) continue
-    queueOf(target).push({ id: ++queueSeq, sessionId: target, text: task })
+    queueOf(target).push({ id: ++queueSeq, sessionId: target, text: task, fromAssist: true })
   }
   broadcastQueue()
   void pumpQueue()
