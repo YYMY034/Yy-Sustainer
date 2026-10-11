@@ -12,16 +12,27 @@ let pass = 0, fail = 0
 const ok = (n, v, extra) => { if (v) { pass++; console.log('OK   ' + n) } else { fail++; console.log('FAIL ' + n + (extra ? '  → ' + extra : '')) } }
 const rule = (sel) => {
   const esc = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const m = cssNoCmt.match(new RegExp('(?:^|\\n)\\s*' + esc + '\\s*\\{([^}]*)\\}'))
-  return m ? m[1] : ''
+  // 同一选择器可能分多条规则（如 T154 给 #inputArea 追加 position: relative）——全部拼接后再断言
+  const re = new RegExp('(?:^|\\n)\\s*' + esc + '\\s*\\{([^}]*)\\}', 'g')
+  return [...cssNoCmt.matchAll(re)].map((m) => m[1]).join(';')
 }
 
 console.log('=== ① 统一 940 列（正文 = 输入框，同宽才可能对齐） ===')
-for (const sel of ['.msg', '.turn-divider', '#composer', '#queueInfo', '#queueList', '#ctxRow']) {
+for (const sel of ['.msg', '.turn-divider', '#composer', '#ctxRow']) {
   ok(`${sel} max-width 940`, /max-width:\s*940px/.test(rule(sel)), rule(sel))
 }
-ok('反向：#question 保持 860（T46 用户要求，不连坐）', /max-width:\s*860px/.test(rule('#question')))
+ok('T151 后 #question 独立元素已删（提问卡改渲染进消息流，反向断言随之作废）', !html.includes('id="question"') && !cssNoCmt.includes('#question'))
 ok('反向：.page-inner 保持 860（设置页无关）', /max-width:\s*860px/.test(rule('.page-inner')))
+
+console.log('=== ①-T155 浮层卡片栈：queueInfo/queueList 归 floatStack 统一定宽 ===')
+// T155：排队提示/列表从独立 940 列改为 floatStack 子元素（与 todoBar/cpBar/banner 同一张悬浮白卡堆叠）
+const fsRule = rule('#floatStack')
+const fsChildRule = rule('#floatStack > *')
+ok('floatStack absolute 悬浮在输入区上方', /position:\s*absolute/.test(fsRule) && /bottom:\s*calc\(100% \+ 8px\)/.test(fsRule), fsRule)
+ok('floatStack 子元素统一定宽 892（与 todoBar 同列）', /max-width:\s*892px/.test(fsChildRule), fsChildRule)
+ok('#queueInfo 白卡（panel 底 + 圆角 + 阴影）', /background:\s*var\(--panel\)/.test(rule('#queueInfo')) && /border-radius:\s*12px/.test(rule('#queueInfo')))
+ok('#queueList.show 白卡（panel 底 + 圆角 + 阴影）', /background:\s*var\(--panel\)/.test(rule('#queueList.show')) && /border-radius:\s*12px/.test(rule('#queueList.show')))
+ok('#banner.show 白卡（panel 底 + 圆角 + 阴影）', /background:\s*var\(--panel\)/.test(rule('#banner.show')) && /border-radius:\s*12px/.test(rule('#banner.show')))
 
 console.log('=== ② padding：留白加大 + 可见态基准不动（T51 var 模型） ===')
 ok('#inputArea 侧 padding 18→28（留白加大）', /padding:\s*6px 28px 8px/.test(rule('#inputArea')), rule('#inputArea'))

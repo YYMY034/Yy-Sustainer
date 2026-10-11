@@ -244,7 +244,8 @@ app.whenReady().then(async () => {
     push("拖放图片 → 附件气泡", !!$("#input .imgchip"))
     push("拖放文件 → 输入框文件名", $("#input").textContent.includes("notes.txt"), $("#input").textContent.slice(0, 40))
     $("#input").innerHTML = ""
-    // 16.5 T154：todoBar 浮层化——展开不挤压消息区（absolute 锚在输入区上方）
+    // 16.5 T155：floatStack 浮层卡片栈——五类条（banner/cpBar/todoBar/queueInfo/queueList）
+    // 统一为悬浮白卡，absolute 锚在输入区上方、不占文档流、垂直堆叠互不重叠
     messages.push({ ts: 950, role: "user", content: "做个任务" })
     render()
     renderTodoBar([
@@ -254,12 +255,39 @@ app.whenReady().then(async () => {
     ], true)
     $("#todoHead").click() // 展开
     await new Promise((r) => setTimeout(r, 300))
+    const fs = $("#floatStack")
     const barR = $("#todoBar").getBoundingClientRect()
     const iaR = $("#inputArea").getBoundingClientRect()
     const msgsR = $("#messages").getBoundingClientRect()
-    push("todoBar 浮层（absolute）", getComputedStyle($("#todoBar")).position === "absolute")
-    push("浮在输入区上沿", Math.abs(barR.bottom - iaR.top) < 20, Math.round(barR.bottom) + " vs " + Math.round(iaR.top))
+    const compR = $("#composer").getBoundingClientRect()
+    const iaHBefore = iaR.height
+    push("floatStack 悬浮（absolute）", getComputedStyle(fs).position === "absolute")
+    push("五类条都是 floatStack 子元素", ["banner", "cpBar", "todoBar", "queueInfo", "queueList"].every((id) => fs.contains(document.getElementById(id))))
+    push("浮在输入区上沿之上", barR.bottom < iaR.top + 20, Math.round(barR.bottom) + " vs " + Math.round(iaR.top))
     push("宽度对齐消息列（892）", Math.round(barR.width) === 892, Math.round(barR.width))
+    // 主题无关：卡片底色必须等于解析后的 --panel（暗色主题下不是纯白）
+    const panelBg = (() => { const probe = document.createElement("div"); probe.style.background = "var(--panel)"; document.body.appendChild(probe); const v = getComputedStyle(probe).backgroundColor; probe.remove(); return v })()
+    push("白卡：底色=panel + 圆角 + 阴影", (() => { const cs = getComputedStyle($("#todoBar")); return cs.backgroundColor === panelBg && cs.borderRadius === "12px" && cs.boxShadow !== "none" })())
+    // 五类条全部显示时：同为白卡、垂直堆叠不重叠、不挤压输入区
+    $("#banner").textContent = "测试错误横幅"
+    $("#banner").classList.add("show")
+    $("#cpBar").querySelector(".cpText").textContent = "上次任务进程被中断"
+    $("#cpBar").classList.add("show")
+    $("#queueInfo").textContent = "排队中：1 条消息"
+    $("#queueInfo").classList.add("show")
+    $("#queueList").innerHTML = `<div class="qitem-row"><span class="qtext">排队示例</span><button class="qdel">删除</button></div>`
+    $("#queueList").classList.add("show")
+    await new Promise((r) => setTimeout(r, 120))
+    const vis = [...fs.children].filter((c) => getComputedStyle(c).display !== "none")
+    push("五类条同时显示均为白卡", vis.length === 5 && vis.every((c) => { const cs = getComputedStyle(c); return cs.backgroundColor === panelBg && cs.borderRadius === "12px" && cs.boxShadow !== "none" }), vis.length + " 张卡")
+    const tops = vis.map((c) => c.getBoundingClientRect())
+    push("垂直堆叠互不重叠（8px 间距）", tops.every((r, i) => i === 0 || r.top - tops[i - 1].bottom >= 7), tops.map((r) => Math.round(r.top)).join(","))
+    push("整栈浮在 composer 上方", Math.round(fs.getBoundingClientRect().bottom) < Math.round(compR.top), Math.round(fs.getBoundingClientRect().bottom) + " < " + Math.round(compR.top))
+    push("悬浮不占文档流（输入区高度不变）", Math.round($("#inputArea").getBoundingClientRect().height) === Math.round(iaHBefore), iaHBefore + " → " + Math.round($("#inputArea").getBoundingClientRect().height))
+    $("#banner").classList.remove("show"); $("#banner").textContent = ""
+    $("#cpBar").classList.remove("show")
+    $("#queueInfo").classList.remove("show"); $("#queueInfo").textContent = ""
+    $("#queueList").classList.remove("show"); $("#queueList").innerHTML = ""
     $("#todoHead").click() // 收起还原
     messages.pop()
     render()

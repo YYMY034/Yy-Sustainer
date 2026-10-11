@@ -64,7 +64,7 @@ console.log("D. 前端：报错只出现在模型输出区（index.html）")
 ok("D1 带 sessionId 的 error 不再写 banner", !html.includes('else if (m.type === "error") { if (!m.sessionId || m.sessionId === activeId)'))
 ok(
   "D2 协议级错误（无 sessionId）仍用 banner 兜底",
-  html.includes('if (!m.sessionId) { $("banner").style.display = "block"; $("banner").textContent = `出错：${m.message}` }'),
+  html.includes('if (!m.sessionId) { $("banner").classList.add("show"); $("banner").textContent = `出错：${m.message}` }'),
 )
 ok("D3 重发提示仍在输出区流式状态行（T71 不回退）", html.includes("streamStatusText = left > 0 ? `${m.info} · ${left}s 后重试`"))
 

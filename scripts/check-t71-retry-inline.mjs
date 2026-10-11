@@ -16,8 +16,8 @@ ok("A6 倒计时原地刷新 paint", seg.includes('const paint = () => { const s
 ok("A7 会话过滤保留", seg.includes('if (m.sessionId && m.sessionId !== activeId) return'));
 
 console.log("B. 全局回归");
-ok("B1 banner 仍服务于其他错误（下载/导出/撤回等）", (script.match(/\$\("banner"\)\.style\.display = "block"/g) || []).length >= 8);
-ok("B2 发送时仍清 banner", /sendMsg|async function send/.test(script) && script.includes('$("banner").style.display = "none"'));
+ok("B1 banner 仍服务于其他错误（下载/导出/撤回等）", (script.match(/\$\("banner"\)\.classList\.add\("show"\)/g) || []).length >= 8);
+ok("B2 发送时仍清 banner", /sendMsg|async function send/.test(script) && script.includes('$("banner").classList.remove("show")'));
 ok("B3 stream-status 渲染模板仍在（render 的流式气泡）", html.includes('<div class="stream-status" id="streamStatus"'));
 
 console.log(`\n${pass} passed, ${fail} failed`);

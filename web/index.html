@@ -388,10 +388,12 @@
   .model-divider .ico:hover .tip { display: block; }
   /* P2-4 进度可见：todo 任务清单条（消息区下方，有任务就显示）——T86 卡片化：
      柔投影 + 展开内容 todoUnfold 动画 + 有任务常驻（全部完成后 10s 才收拢为摘要条） */
-  /* T151/T154 todoBar 浮层化：锚在输入区上方（absolute），展开不挤压/遮挡消息区的文档流——
-     白底卡片 + 强阴影（浮层语义）+ 展开内容 max-height 内部滚动 */
+  /* T155 输入区上方浮层堆栈：todo 进度/断点横幅/排队条/错误横幅统一悬浮——
+     不占文档流（消息区高度永不被挤压）、垂直堆叠互不重叠；白底卡片 + 强阴影 */
   #inputArea { position: relative; }
-  #todoBar { display: none; position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; max-width: 892px; margin: 0 auto; padding: 10px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 32px var(--shadow); z-index: 40; }
+  #floatStack { position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 40; pointer-events: none; }
+  #floatStack > * { pointer-events: auto; width: 100%; max-width: 892px; margin: 0; }
+  #todoBar { display: none; padding: 10px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 32px var(--shadow); }
   #todoBar.show { display: block; }
   #todoBar.expanded #todoItems { display: block; animation: todoUnfold .18s cubic-bezier(.22,.61,.36,1); }
   @keyframes todoUnfold { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
@@ -720,12 +722,12 @@
   #composer:focus-within { border-color: var(--accent); }
   /* T150 拖放：外部文件拖入窗口时输入区高亮提示 */
   #composer.drag { border-color: var(--accent); border-style: dashed; background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
-  /* T23 排队提示/排队列表悬浮在输出区（panel2）上：与 messages/inputArea 同底色，不再独立卡片底 */
-  #queueInfo { max-width: 940px; margin: 0 auto; padding: 0 4px; font-size: 12px; color: var(--dim); display: none; }
-  #queueInfo.show { display: block; margin-bottom: 4px; }
-  /* T15/T23 排队消息：矮长条（左侧 accent 竖线 + 透明底，融入输出区背景），grip 拖拽点 + 图标化操作保留 */
-  #queueList { max-width: 940px; margin: 0 auto; display: none; flex-direction: column; gap: 4px; }
-  #queueList.show { display: flex; margin-bottom: 6px; }
+  /* T155 排队提示/排队列表：与 todoBar/cpBar/banner 同一套悬浮白卡（floatStack 内垂直堆叠，不占文档流） */
+  #queueInfo { padding: 6px 14px; font-size: 12px; color: var(--dim); display: none; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 32px var(--shadow); }
+  #queueInfo.show { display: block; }
+  /* T15/T23 排队消息：矮长条（左侧 accent 竖线），grip 拖拽点 + 图标化操作保留 */
+  #queueList { display: none; flex-direction: column; gap: 4px; }
+  #queueList.show { display: flex; padding: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 32px var(--shadow); }
   /* T38 排队项：加一圈细边框（浅底 + 1px 描边 + 左侧 3px accent 竖线），在白色输入区上成为有形的长条 */
   #queueList .qitem-row { display: flex; align-items: center; gap: 10px; background: color-mix(in srgb, var(--panel2) 55%, transparent); border: 1px solid color-mix(in srgb, var(--border) 85%, transparent); border-left: 3px solid color-mix(in srgb, var(--accent) 60%, var(--border)); border-radius: 8px; padding: 3px 10px; font-size: 12.5px; color: var(--text); }
   #queueList .qitem-row:hover { background: color-mix(in srgb, var(--accent) 8%, var(--panel2)); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
@@ -860,9 +862,11 @@
   .msg.archived { opacity: .62; }
   #olderBtn { display: block; margin: 0 auto 14px; background: var(--panel2); color: var(--dim); border: 1px dashed var(--border); border-radius: 12px; padding: 6px 18px; cursor: pointer; font-size: 12px; }
   #olderBtn:hover { color: var(--accent); border-color: var(--accent); }
-  #banner { font-size: 12px; color: var(--err); padding: 0 22px 6px; display: none; }
+  /* T155 错误横幅：与 todoBar/cpBar 同一套悬浮卡片（display 由 .show 类驱动，JS 不再写 inline style） */
+  #banner { display: none; }
+  #banner.show { display: block; font-size: 12px; color: var(--err); background: var(--panel); border: 1px solid color-mix(in srgb, var(--err) 35%, var(--border)); border-radius: 12px; padding: 10px 14px; box-shadow: 0 8px 32px var(--shadow); }
   /* T93 P2 断点恢复横幅：上次进程被中断、还有未完成回合时出现 */
-  #cpBar { display: none; width: 100%; max-width: 892px; margin: 0 auto 10px; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12px; color: var(--text);
+  #cpBar { display: none; width: 100%; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12px; color: var(--text);
            background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 2px 10px var(--shadow); } /* T152：纯白底与消息区一致（accent 混色仍显灰）*/
   #cpBar.show { display: flex; }
   #cpBar .cpText { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1119,22 +1123,25 @@
     <!-- T41：图标换手绘 SVG（向下箭头 + 底横线），不再是文本 ↓ -->
     <button id="jumpBottom" title="回到底部"><svg width="18" height="18" viewBox="0 0 16 16" fill="none"><path d="M8 3.3v7.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M4.6 7.7L8 11.1l3.4-3.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.8 13.4h8.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
     <!-- T136 提问卡片移入消息流尾部渲染（render() 里 qcardHtml()），独立元素已删 -->
-    <div id="banner"></div>
-    <!-- T93 P2 断点恢复：上次进程被中断、本会话还有未完成回合时显示，三个动作对应后端 resume -->
-    <div id="cpBar"><span class="cpText"></span><button class="primary" data-act="adopt">采纳已产出</button><button data-act="retry">重新发起</button><button data-act="discard">丢弃</button></div>
     <div id="inputArea">
-      <!-- P2-4 进度可见：todo 任务清单进度条（state.todo 驱动，≥1 项时显示） -->
-    <div id="todoBar">
-      <div id="todoHead">
-        <span id="todoTitle">任务进度</span>
-        <span id="todoCount"></span>
-        <button id="todoToggle" title="展开/收起"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <!-- T155 输入区上方浮层堆栈：todo 进度/断点横幅/排队条/错误横幅统一悬浮（不占文档流、不挤压消息区），垂直堆叠互不重叠 -->
+      <div id="floatStack">
+        <div id="banner"></div>
+        <!-- T93 P2 断点恢复：上次进程被中断、本会话还有未完成回合时显示，三个动作对应后端 resume -->
+        <div id="cpBar"><span class="cpText"></span><button class="primary" data-act="adopt">采纳已产出</button><button data-act="retry">重新发起</button><button data-act="discard">丢弃</button></div>
+        <!-- P2-4 进度可见：todo 任务清单进度条（state.todo 驱动，≥1 项时显示） -->
+        <div id="todoBar">
+          <div id="todoHead">
+            <span id="todoTitle">任务进度</span>
+            <span id="todoCount"></span>
+            <button id="todoToggle" title="展开/收起"><svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </div>
+          <div id="todoProg"><div id="todoFill"></div></div>
+          <div id="todoItems"></div>
+        </div>
+        <div id="queueInfo"></div>
+        <div id="queueList"></div>
       </div>
-      <div id="todoProg"><div id="todoFill"></div></div>
-      <div id="todoItems"></div>
-    </div>
-      <div id="queueInfo"></div>
-      <div id="queueList"></div>
       <div id="composer">
         <div id="input" contenteditable="true" data-placeholder="输入任务，Enter 发送，Shift+Enter 换行；可直接粘贴图片"></div>
         <div id="composerBar">
@@ -3109,7 +3116,7 @@ async function downloadFile(pathOrUrl, filename) {
     document.body.appendChild(a); a.click(); a.remove()
     setTimeout(() => URL.revokeObjectURL(a.href), 3000)
   } catch (e) {
-    $("banner").style.display = "block"; $("banner").textContent = `下载失败：${e.message}`
+    $("banner").classList.add("show"); $("banner").textContent = `下载失败：${e.message}`
   }
 }
 // T43 思维导图导出 PNG：SVG 内的颜色/字号全是字面量（不用 CSS 变量），所以克隆后能独立栅格化。
@@ -3151,7 +3158,7 @@ async function saveMindmapPng(svg, btn) {
     document.body.appendChild(a); a.click(); a.remove()
     setTimeout(() => URL.revokeObjectURL(a.href), 3000)
   } catch (e) {
-    $("banner").style.display = "block"; $("banner").textContent = `导出图片失败：${e.message}`
+    $("banner").classList.add("show"); $("banner").textContent = `导出图片失败：${e.message}`
   } finally {
     btn.disabled = false; label.textContent = old
   }
@@ -3176,7 +3183,7 @@ async function exportTableXlsx(table, btn) {
     document.body.appendChild(a); a.click(); a.remove()
     setTimeout(() => URL.revokeObjectURL(a.href), 3000)
   } catch (e) {
-    $("banner").style.display = "block"; $("banner").textContent = `导出 xlsx 失败：${e.message}`
+    $("banner").classList.add("show"); $("banner").textContent = `导出 xlsx 失败：${e.message}`
   } finally {
     btn.disabled = false; label.textContent = old
   }
@@ -3293,11 +3300,11 @@ function bindMediaEvents() {
           render()
         } else {
           el.disabled = false; el.textContent = "撤销"
-          $("banner").style.display = "block"; $("banner").textContent = d.error ?? "撤销失败"
+          $("banner").classList.add("show"); $("banner").textContent = d.error ?? "撤销失败"
         }
       } catch (e) {
         el.disabled = false; el.textContent = "撤销"
-        $("banner").style.display = "block"; $("banner").textContent = `撤销失败：${e.message}`
+        $("banner").classList.add("show"); $("banner").textContent = `撤销失败：${e.message}`
       }
     }
   })
@@ -3325,9 +3332,9 @@ function bindMediaEvents() {
           try {
             const r = await fetch("/api/messages/regenerate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: activeId, ts }) })
             const d = await r.json()
-            if (!r.ok) { $("banner").style.display = "block"; $("banner").textContent = d.error ?? "重新生成失败" }
+            if (!r.ok) { $("banner").classList.add("show"); $("banner").textContent = d.error ?? "重新生成失败" }
           } catch (e) {
-            $("banner").style.display = "block"; $("banner").textContent = `重新生成失败：${e.message}`
+            $("banner").classList.add("show"); $("banner").textContent = `重新生成失败：${e.message}`
           }
           return
         }
@@ -3370,8 +3377,8 @@ async function recallMessage(ts) {
   const sid = activeId // 快照发起时的会话：响应回来可能用户已切会话，提示只落在发起会话
   try {
     const r = await fetch("/api/messages/recall", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sid, ts }) })
-    if (!r.ok && sid === activeId) { const e = await r.json(); $("banner").style.display = "block"; $("banner").textContent = `撤回失败：${e.error ?? r.status}` }
-  } catch (e) { if (sid === activeId) { $("banner").style.display = "block"; $("banner").textContent = `撤回失败：${e.message}` } }
+    if (!r.ok && sid === activeId) { const e = await r.json(); $("banner").classList.add("show"); $("banner").textContent = `撤回失败：${e.error ?? r.status}` }
+  } catch (e) { if (sid === activeId) { $("banner").classList.add("show"); $("banner").textContent = `撤回失败：${e.message}` } }
 }
 // 取回编辑：先停止模型思考 + 截断该消息及之后（服务端 takeback），原文放回输入框让用户改；
 // 改完 Enter 走普通发送（不等价于旧的"改完自动重发"——用户自己掌握发送时机）
@@ -3379,7 +3386,7 @@ async function editMessage(ts) {
   const sid = activeId // 同 recallMessage：响应回来时若已切会话，不再往新会话界面写提示/填内容
   try {
     const r = await fetch("/api/messages/takeback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sid, ts }) })
-    if (!r.ok) { if (sid === activeId) { const e = await r.json(); $("banner").style.display = "block"; $("banner").textContent = `取回失败：${e.error ?? r.status}` } return }
+    if (!r.ok) { if (sid === activeId) { const e = await r.json(); $("banner").classList.add("show"); $("banner").textContent = `取回失败：${e.error ?? r.status}` } return }
     const d = await r.json()
     editContext = null // 取回模式：普通发送即可（历史已截断，无需再截）
     if (sid !== activeId) return // 用户已切走：不把取回的文本塞进别的会话输入框
@@ -3394,7 +3401,7 @@ async function editMessage(ts) {
     range.collapse(false)
     sel?.removeAllRanges(); sel?.addRange(range)
     $("status").textContent = "已取回：正在输入框中，改完 Enter 重新发送"
-  } catch (e) { if (sid === activeId) { $("banner").style.display = "block"; $("banner").textContent = `取回失败：${e.message}` } }
+  } catch (e) { if (sid === activeId) { $("banner").classList.add("show"); $("banner").textContent = `取回失败：${e.message}` } }
 }
 
 // P0-2：红绿灯。绿 <60% 黄 <85% 红 ≥85%
@@ -4104,9 +4111,9 @@ function connect() {
       // T74：带 sessionId 的模型/API 报错，服务端已同步落一条 `message`（内容是 `[出错] 真实原因`），
       // 在输出区就能看到全部细节——再往输入框上方的 banner 甩一份纯属重复（用户明确要求报错只显示在模型输出那里）。
       // 只有协议级错误（会话不存在等，无 sessionId）才用 banner，因为那时消息列表里没地方放。
-      if (!m.sessionId) { $("banner").style.display = "block"; $("banner").textContent = `出错：${m.message}` }
+      if (!m.sessionId) { $("banner").classList.add("show"); $("banner").textContent = `出错：${m.message}` }
     }
-    else if (m.type === "notice") { if (!m.sessionId || m.sessionId === activeId) { $("status").textContent = m.text; if (m.text === "已停止") $("banner").style.display = "none" } }
+    else if (m.type === "notice") { if (!m.sessionId || m.sessionId === activeId) { $("status").textContent = m.text; if (m.text === "已停止") $("banner").classList.remove("show") } }
     else if (m.type === "sub-step") {
       // T100：子代理分道事件——按 persona 各自一行，实时更新
       if (!m.sessionId || m.sessionId === activeId) {
@@ -4253,12 +4260,12 @@ async function createSessionWithCwd(cwd) {
   if (!cwdTrim && cwd !== "") { $("cwdCustom").focus(); return } // 显式传空串 = 自由会话（T144）
   try {
     const r = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: cwdTrim }) })
-    if (!r.ok) { const e = await r.json(); $("banner").style.display = "block"; $("banner").textContent = `创建失败：${e.error ?? r.status}`; return }
+    if (!r.ok) { const e = await r.json(); $("banner").classList.add("show"); $("banner").textContent = `创建失败：${e.error ?? r.status}`; return }
     $("cwdPop").classList.remove("show")
     const meta = await r.json()
     await loadSessions(); openSession(meta.id)
     $("input").focus()
-  } catch (e) { $("banner").style.display = "block"; $("banner").textContent = `创建失败：${e.message}` }
+  } catch (e) { $("banner").classList.add("show"); $("banner").textContent = `创建失败：${e.message}` }
 }
 $("btnNew").onclick = openCwdPop
 // D2 顶栏新建对话：当前会话有工作区就直接沿用该目录建（免选），没有则弹工作区选择
@@ -4281,7 +4288,7 @@ $("cwdSysPick").onclick = async () => {
   } else {
     // 非 Electron 环境（浏览器）：预填一个常见路径，仍可用系统输入法粘贴
     $("cwdCustom").focus()
-    $("banner").style.display = "block"
+    $("banner").classList.add("show")
     $("banner").textContent = "当前在浏览器中打开，请直接粘贴文件夹完整路径后点「开聊」"
   }
 }
@@ -4308,8 +4315,8 @@ $("permMenu").querySelectorAll(".mi").forEach((el) => el.onclick = async () => {
   try {
     const r = await fetch("/api/permission", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, sessionId: activeId }) })
     if (r.ok) { permMode = mode; renderPermBtn(); $("status").textContent = `本会话权限：${PERM_LABEL[mode]}` }
-    else { const e = await r.json(); $("banner").style.display = "block"; $("banner").textContent = `切换失败：${e.error ?? r.status}` }
-  } catch (e) { $("banner").style.display = "block"; $("banner").textContent = `切换失败：${e.message}` }
+    else { const e = await r.json(); $("banner").classList.add("show"); $("banner").textContent = `切换失败：${e.error ?? r.status}` }
+  } catch (e) { $("banner").classList.add("show"); $("banner").textContent = `切换失败：${e.message}` }
   closePermMenu()
 })
 // T136：提问卡片的 btnFree/freeInput 绑定已移入 bindQcard()（卡片现在随 render 动态重建）
@@ -4325,9 +4332,9 @@ $("btnCompact").onclick = async () => {
   $("status").textContent = "压缩中"
   try {
     const r = await fetch(`/api/sessions/${activeId}/compact`, { method: "POST" })
-    if (!r.ok) { const e = await r.json(); $("banner").style.display = "block"; $("banner").textContent = `压缩失败：${e.error ?? r.status}` }
+    if (!r.ok) { const e = await r.json(); $("banner").classList.add("show"); $("banner").textContent = `压缩失败：${e.error ?? r.status}` }
   } catch (e) {
-    $("banner").style.display = "block"; $("banner").textContent = `压缩失败：${e.message}`
+    $("banner").classList.add("show"); $("banner").textContent = `压缩失败：${e.message}`
   }
   $("btnCompact").textContent = "一键压缩（历史 → 摘要）"
 }
@@ -4358,7 +4365,7 @@ async function queueOp(op, id) {
     if (op === "send") {
       const r = await fetch("/api/queue/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) })
       if (r.ok) { const d = await r.json(); $("status").textContent = d.prioritized ? "已提前到队首，当前任务结束后优先发送" : "已立即发送" }
-      else { const e = await r.json(); $("banner").style.display = "block"; $("banner").textContent = e.error ?? "操作失败" }
+      else { const e = await r.json(); $("banner").classList.add("show"); $("banner").textContent = e.error ?? "操作失败" }
     } else if (op === "edit") {
       // 取回：出队 + 文本放回输入框（editContext 置空 = 普通发送，重新排队或直接跑）
       const q = queueItems.find((x) => x.id === id)
@@ -4367,12 +4374,12 @@ async function queueOp(op, id) {
         $("input").textContent = (q?.text ?? "").replace(/\s+/g, " ")
         $("input").focus()
         $("status").textContent = "已取回编辑：改完 Enter 重新发送"
-      } else { const e = await r.json(); $("banner").style.display = "block"; $("banner").textContent = e.error ?? "操作失败" }
+      } else { const e = await r.json(); $("banner").classList.add("show"); $("banner").textContent = e.error ?? "操作失败" }
     } else if (op === "del") {
       const r = await fetch("/api/queue/item", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) })
-      if (!r.ok) { const e = await r.json(); $("banner").style.display = "block"; $("banner").textContent = e.error ?? "操作失败" }
+      if (!r.ok) { const e = await r.json(); $("banner").classList.add("show"); $("banner").textContent = e.error ?? "操作失败" }
     }
-  } catch (e) { $("banner").style.display = "block"; $("banner").textContent = `操作失败：${e.message}` }
+  } catch (e) { $("banner").classList.add("show"); $("banner").textContent = `操作失败：${e.message}` }
 }
 
 async function doSend() {
@@ -4401,7 +4408,7 @@ async function doSend() {
   inputEl.innerHTML = ""
   autoGrow() // 发送后输入框收回单行高度
   inputEl.focus()
-  $("banner").style.display = "none"
+  $("banner").classList.remove("show")
   editContext = null // Batch G：编辑已改为「取回时即截断」（takeback），发送统一走普通 /api/chat
   const body = { sessionId: activeId, text, contentParts }
   const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
@@ -5405,8 +5412,8 @@ async function setVisionModelSpec(spec) {
       visionModel = spec
       syncSetModelLabels()
       $("status").textContent = spec ? `识图模型：${spec}` : "识图模型已清除"
-    } else { const e = await r.json(); $("banner").style.display = "block"; $("banner").textContent = `设置失败：${e.error ?? r.status}` }
-  } catch (e) { $("banner").style.display = "block"; $("banner").textContent = `设置失败：${e.message}` }
+    } else { const e = await r.json(); $("banner").classList.add("show"); $("banner").textContent = `设置失败：${e.error ?? r.status}` }
+  } catch (e) { $("banner").classList.add("show"); $("banner").textContent = `设置失败：${e.message}` }
   closeModelMenu()
 }
 async function setImageModelSpec(spec) {
@@ -5416,8 +5423,8 @@ async function setImageModelSpec(spec) {
       imageModel = spec
       syncSetModelLabels()
       $("status").textContent = spec ? `生图模型：${spec}` : "生图模型已清除（自动尝试）"
-    } else { const e = await r.json(); $("banner").style.display = "block"; $("banner").textContent = `设置失败：${e.error ?? r.status}` }
-  } catch (e) { $("banner").style.display = "block"; $("banner").textContent = `设置失败：${e.message}` }
+    } else { const e = await r.json(); $("banner").classList.add("show"); $("banner").textContent = `设置失败：${e.error ?? r.status}` }
+  } catch (e) { $("banner").classList.add("show"); $("banner").textContent = `设置失败：${e.message}` }
   closeModelMenu()
 }
 $("segTheme").querySelectorAll("button").forEach((b) => b.onclick = () => {
