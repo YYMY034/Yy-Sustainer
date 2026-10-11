@@ -20,7 +20,7 @@
  */
 import { execFileSync } from "node:child_process"
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto"
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync , renameSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 
@@ -99,7 +99,14 @@ function masterKey(): Buffer {
           keySource = "dpapi"
           return cachedKey
         }
-        warnOnce("DPAPI 解保护失败（换用户/换机器？）——请重新填写 API Key，程序继续启动")
+        // T143：DPAPI 解保护失败（可能只是瞬时故障）——**绝不覆盖旧 key 文件**：
+        // 先把旧文件改名留档，新生成的主密钥写主路径。否则旧 enc 密文全部变成解不开的
+        // 废纸（实测：一次 DPAPI 抖动后自动换 key，全部 provider 的 API Key 随之丢失）。
+        try {
+          const bak = `${KEY_FILE}.bak-${Date.now()}`
+          renameSync(KEY_FILE, bak)
+          warnOnce(`DPAPI 解保护失败——旧主密钥已留档到 ${bak}，需恢复时用它重新解密备份里的 config.json`)
+        } catch { /* 改名失败也无妨，至少不再覆盖 */ }
       } else {
         cachedKey = Buffer.from(raw, "base64")
         keySource = "file"

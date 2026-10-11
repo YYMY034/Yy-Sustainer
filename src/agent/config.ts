@@ -339,6 +339,21 @@ function decryptInPlace(cfg: YyagentConfig): YyagentConfig {
 /** T91：唯一的落盘出口——统一在这里加密，避免哪天多出一条绕过加密的写路径 */
 function writeConfig(cfg: YyagentConfig): void {
   mkdirSync(join(CONFIG_PATH, ".."), { recursive: true })
+  // T143 防空覆盖：主密钥抖动会导致内存里的 key 解密成空串——若此时把配置写回，
+  // 磁盘上完好的 enc 密文就被空串抹掉（实测丢过全部 provider 的 key）。
+  // 防御：磁盘原文里有 enc 密文、而本次要写的对应字段是空 → 保留磁盘密文。
+  try {
+    const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as YyagentConfig
+    for (const [name, pv] of Object.entries(cfg.providers ?? {})) {
+      const disk = raw.providers?.[name]
+      if (pv && typeof pv.apiKey === "string" && !pv.apiKey && typeof disk?.apiKey === "string" && disk.apiKey.startsWith("enc:")) {
+        pv.apiKey = disk.apiKey
+      }
+    }
+    if (typeof cfg.authToken === "string" && !cfg.authToken && typeof raw.authToken === "string" && raw.authToken.startsWith("enc:")) {
+      cfg.authToken = raw.authToken
+    }
+  } catch { /* 磁盘没有/坏文件时不防御 */ }
   writeFileSync(CONFIG_PATH, JSON.stringify(encryptInPlace(cfg), null, 2))
 }
 
