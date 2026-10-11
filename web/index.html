@@ -3588,9 +3588,10 @@ function renderUsageCharts() {
     // 打开设置页的 loadUsage 会立刻真实加载）和真实加载失败（usageErr 有原因）。
     el.innerHTML = usageErr
       ? `<div class="ch-empty">用量明细暂不可用 —— ${esc(usageErr)}<br><button id="usageRetry" style="margin-top:8px;font:inherit;font-size:12px;padding:4px 12px;border-radius:8px;cursor:pointer;">重试</button></div>`
-      : usageRequested ? `<div class="ch-empty">正在加载用量明细…</div>` : `<div class="ch-empty" style="opacity:.5;">打开设置页时自动加载用量明细</div>`
+      : `<div class="ch-empty" style="cursor:pointer;" title="点击立即加载">${usageRequested ? "正在加载用量明细…" : "点击加载用量明细"}</div>`
     const retry = document.getElementById("usageRetry")
     if (retry) retry.onclick = () => loadUsage()
+    el.querySelector(".ch-empty").onclick = () => { if (!usageRequested) loadUsage() }
     return
   }
   // T86：两张用量图合并为一张 3D 翻转卡——正面 Token 活动热力图，背面每日模型累计用量环形图，
@@ -4625,6 +4626,7 @@ document.querySelectorAll(".acc-dot").forEach((btn) => btn.onclick = () => {
 })
 document.querySelectorAll(".acc-dot").forEach((b) => b.classList.toggle("on", b.dataset.accent === (ACCENTS[localStorage.getItem("yyagent-accent")] ? localStorage.getItem("yyagent-accent") : "graphite")))
 applyTheme(localStorage.getItem("yyagent-theme") ?? "light")
+loadUsage() // T148：启动即预取用量明细——打开设置页秒显（不再依赖打开动作触发）
 $("themeBtn").onclick = () => applyTheme(document.documentElement.classList.contains("light") ? "dark" : "light")
 
 // ---- P1-1 定时任务列表 ----

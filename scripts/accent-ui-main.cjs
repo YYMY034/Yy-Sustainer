@@ -203,6 +203,12 @@ app.whenReady().then(async () => {
     // 清理：删掉这个测试会话
     await fetch(`/api/sessions/${fmeta.id}`, { method: "DELETE" })
     await loadSessions()
+    // 13 T148：设置页用量明细——打开设置页后 loadUsage 应渲染出图（不再卡占位）
+    $("#settingsBtn").click()
+    await new Promise((r) => setTimeout(r, 1500))
+    const uc = $("#usageCharts")
+    push("设置页用量卡内容", !!uc, uc ? uc.textContent.trim().slice(0, 60) : "null")
+    push("用量图已渲染（非占位）", !!uc && uc.innerHTML.includes("flip-card"), uc ? uc.textContent.trim().slice(0, 60) : "")
     return JSON.stringify(out)
   }
   const script = `(async () => { try { return await (${assertFn.toString()})() } catch (e) { return JSON.stringify([["脚本异常", false, e && e.stack ? String(e.stack).split("\\n").slice(0, 4).join(" | ") : String(e)]]) } })()`
