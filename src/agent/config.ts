@@ -204,6 +204,12 @@ export interface YyagentConfig {
   visionModel?: string
   /** T15 默认生图模型（"provider/modelId"）：imggen 优先用它调 images/generations；留空自动猜 */
   imageModel?: string
+  /**
+   * T141 本地生图（ComfyUI）：enabled 时 imggen 优先走本机 ComfyUI（零 token 零费用、离线），
+   * 失败/不可达自动回落云端 API 通道。url 默认 http://127.0.0.1:8188。
+   * 要求 ComfyUI 已装 Qwen-Image-2.1-Turbo GGUF 三件套（部署指南见仓库 docs 或外部配置指南）。
+   */
+  localImageGen?: { enabled?: boolean; url?: string }
   /** P1-9 网页搜索引擎（websearch 工具用），默认 bing */
   searchEngine?: "bing" | "duckduckgo" | "baidu"
   // T93：长任务模式开关已挪到会话 meta（SessionMeta.longTask）——原先这里的 longTask 是死配置

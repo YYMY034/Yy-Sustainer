@@ -2243,6 +2243,17 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     broadcast({ type: "notice", text: `搜索引擎已切换为 ${engine}` })
     return json(res, 200, { ok: true, searchEngine: engine })
   }
+  // T141 本地生图（ComfyUI）开关：GET 回读 + POST 保存
+  if ((m === "GET" || m === "POST") && p === "/api/local-img") {
+    const cfg = loadConfig()
+    if (m === "POST") {
+      const body = JSON.parse((await readBody(req)) || "{}")
+      cfg.localImageGen = { enabled: !!body.enabled, url: String(body.url || cfg.localImageGen?.url || "http://127.0.0.1:8188") }
+      saveConfig(cfg)
+      return json(res, 200, { ok: true, localImageGen: cfg.localImageGen })
+    }
+    return json(res, 200, { ok: true, localImageGen: cfg.localImageGen ?? { enabled: false } })
+  }
   // 监工模式开关：主任务完成后辅助对话自动质检 + SEND 回传
   if (m === "POST" && p === "/api/watch") {
     const body = JSON.parse((await readBody(req)) || "{}")

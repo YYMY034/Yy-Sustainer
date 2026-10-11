@@ -1501,9 +1501,15 @@
         
         </div>
         <div class="set-row" style="border-bottom:none;">
-          <div class="sl">默认生图模型<div class="sd">imggen 生成图片时优先使用的模型通道（需服务商支持 images/generations 接口，如通义万相、DALL·E 兼容接口）；留空 = 自动遍历所有通道尝试</div></div>
+          <div class="sl">默认生图模型<div class="sd">imggen 生成图片时优先使用的模型通道（需服务商支持 images/generations 接口，如通义万相、DALL·E 兼容接口）；留空 = 自动遍历所有通道尝试。开启下方本地生图后此项作为回落</div></div>
           <div class="model-select">
             <button class="ms-btn" id="setImageBtn"><span id="setImageLabel">（不设置）</span><span class="chev">▾</span></button>
+          </div>
+        </div>
+        <div class="set-row" style="border-bottom:none;">
+          <div class="sl">本地生图（ComfyUI）<div class="sd">本机 ComfyUI 已部署 Qwen-Image-2.1-Turbo 时开启：imggen 优先走本地生图，零 token 零费用、离线可用（1024² 约 35 秒）；本地不可达自动回落上方云端通道。需 ComfyUI 运行在 http://127.0.0.1:8188</div></div>
+          <div class="seg" id="segLocalImg">
+            <button data-v="on">开启</button><button data-v="off">关闭</button>
           </div>
         </div>
       </div>
@@ -5059,6 +5065,19 @@ $("segRail").querySelectorAll("button").forEach((b) => b.onclick = () => {
   applyRailMode(b.dataset.v)
 })
 applyRailMode(localStorage.getItem("yyagent-rail") ?? "always")
+// T141 本地生图（ComfyUI）开关：初始从 /api/local-img 读，点击 POST 保存
+async function syncLocalImgSeg() {
+  try {
+    const d = await (await fetch("/api/local-img")).json()
+    $("segLocalImg").querySelectorAll("button").forEach((b) => b.classList.toggle("active", (b.dataset.v === "on") === !!d.localImageGen?.enabled))
+  } catch { /* 网关未起不刷 */ }
+}
+$("segLocalImg").querySelectorAll("button").forEach((b) => b.onclick = async () => {
+  await fetch("/api/local-img", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: b.dataset.v === "on" }) })
+  $("segLocalImg").querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b))
+  $("status").textContent = b.dataset.v === "on" ? "本地生图已开启（需 ComfyUI 运行在 127.0.0.1:8188）" : "本地生图已关闭"
+})
+syncLocalImgSeg()
 // 监工模式：主任务完成后辅助对话自动质检 + SEND 回主对话（存 config.watch，TUI/Web 共用）
 // 开关位于辅助对话顶部 #assistWatchRow 内
 function renderWatchSeg() {

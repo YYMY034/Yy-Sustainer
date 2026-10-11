@@ -185,6 +185,63 @@ export const docxWriteTool = tool({
 
 // ---------- 图像生成 ----------
 
+/**
+ * T141 本地 ComfyUI 生图（Qwen-Image-2.1-Turbo GGUF，零 token 零费用、离线）。
+ * 工作流 = 8-sigma 精确调度（ManualSigmas 传模型内置的 8 个采样值——官方卡明确
+ * "其它调度未经评估"，simple 均匀摊开会让小字/细节崩，实测文字正确率天差地别）。
+ * 成功返回结果文本，任何一步失败返回 null（调用方回落云端 API 通道）。
+ */
+export async function localComfyImage(prompt: string, size: string, outPath: string): Promise<string | null> {
+  const cfg = loadConfig()
+  const base = (cfg.localImageGen?.url || "http://127.0.0.1:8188").replace(/\/+$/, "")
+  const dims = (size || "1024x1024").split(/[xX*×]/).map(Number)
+  const w = Math.max(512, Math.round((dims[0] || 1024) / 32) * 32) // 宽高须为 32 的整数倍
+  const h = Math.max(512, Math.round((dims[1] || 1024) / 32) * 32)
+  const workflow: Record<string, { class_type: string; inputs: Record<string, unknown> }> = {
+    "1": { class_type: "UnetLoaderGGUF", inputs: { unet_name: "qwen_image_2.1_Q4_K_M.gguf" } },
+    "2": { class_type: "CLIPLoader", inputs: { clip_name: "qwen3vl_8b_w4a8.safetensors", type: "qwen_image" } },
+    "3": { class_type: "VAELoader", inputs: { vae_name: "qwen_image_2.1_vae_bf16.safetensors" } },
+    "4": { class_type: "CLIPTextEncode", inputs: { text: prompt, clip: ["2", 0] } },
+    "5": { class_type: "EmptySD3LatentImage", inputs: { width: w, height: h, batch_size: 1 } },
+    // 官方 model_index.json 的 sample_sigmas，末尾补 0 = 9 值 8 步
+    "6": { class_type: "ManualSigmas", inputs: { sigmas: "1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0" } },
+    "7": { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } },
+    "8": { class_type: "SamplerCustom", inputs: {
+      model: ["1", 0], add_noise: true, noise_seed: Math.floor(Math.random() * 1e15),
+      cfg: 1.0, positive: ["4", 0], negative: ["4", 0], sampler: ["7", 0], sigmas: ["6", 0], latent_image: ["5", 0] } },
+    "9": { class_type: "VAEDecode", inputs: { samples: ["8", 0], vae: ["3", 0] } },
+    "10": { class_type: "SaveImage", inputs: { images: ["9", 0], filename_prefix: "yyagent" } },
+  }
+  const sub = (p: string, timeoutMs: number) =>
+    fetch(`${base}${p}`, { signal: AbortSignal.timeout(timeoutMs), ...p === "/prompt" ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow }) } : {} })
+  const r = await sub("/prompt", 15_000)
+  if (!r.ok) return null
+  const { prompt_id: pid } = (await r.json()) as { prompt_id?: string }
+  if (!pid) return null
+  // 轮询最长 10 分钟：首次运行要加载 10GB 模型，很慢是正常的
+  for (let i = 0; i < 120; i++) {
+    await new Promise((res) => setTimeout(res, 5000))
+    try {
+      const rec = (await (await fetch(`${base}/history/${pid}`, { signal: AbortSignal.timeout(10_000) })).json())[pid] as
+        | { status?: { status_str?: string }; outputs?: Record<string, { images?: Array<{ filename: string; subfolder?: string }> }> }
+        | undefined
+      if (!rec) continue
+      if (rec.status?.status_str === "error") return null
+      const img = rec.outputs?.["10"]?.images?.[0]
+      if (img) {
+        const ab = await fetch(
+          `${base}/view?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(img.subfolder ?? "")}&type=output`,
+          { signal: AbortSignal.timeout(60_000) }).then((x) => x.arrayBuffer())
+        const buf = Buffer.from(new Uint8Array(ab))
+        mkdirSync(resolve(outPath, ".."), { recursive: true })
+        writeFileSync(outPath, buf)
+        return `[本地生成] ${outPath}（${(buf.length / 1024).toFixed(0)} KB，ComfyUI · Qwen-Image-2.1-Turbo 本地，零 token）`
+      }
+    } catch { /* 轮询抖动继续 */ }
+  }
+  return null
+}
+
 export const imggenTool = tool({
   description:
     "AI 生成图片：按文字描述生成一张图片，保存为当前工作区下的 PNG 并返回路径。需要已配置支持图像生成的模型通道（自动选用可用的 provider）。",
@@ -213,6 +270,13 @@ export const imggenTool = tool({
     const outPath = resolve(currentCwd(), filename || `generated-${Date.now()}.png`)
     const denied = await gateWrite("imggen", outPath)
     if (denied) return denied
+    // T141：本地 ComfyUI 通道优先——enabled 且可达时零 token 出图，失败自动回落云端 API
+    if (cfg.localImageGen?.enabled) {
+      try {
+        const local = await localComfyImage(prompt, size || "1024x1024", outPath)
+        if (local) return local
+      } catch { /* 本地不可用，继续走云端 */ }
+    }
     const errors: string[] = []
     for (const [name, pv] of order) {
       if (!pv.baseURL || pv.apiKey === "REPLACE_ME") continue
