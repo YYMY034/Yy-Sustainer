@@ -244,6 +244,15 @@ app.whenReady().then(async () => {
     push("拖放图片 → 附件气泡", !!$("#input .imgchip"))
     push("拖放文件 → 输入框文件名", $("#input").textContent.includes("notes.txt"), $("#input").textContent.slice(0, 40))
     $("#input").innerHTML = ""
+    // 16 T149：点图片卡片时右侧栏没开 → 自动打开抽屉 + 预览显示
+    closeAssist()
+    push("前置：抽屉已关闭", !$("#assistDrawer").classList.contains("open"))
+    await openPreview("C:\fake\img.png", "img.png") // 与 file-card 点击同一函数
+    await new Promise((r) => setTimeout(r, 300))
+    push("点图片卡片自动打开右侧栏", $("#assistDrawer").classList.contains("open"))
+    push("预览面板显示图片", !!$("#pvBody .pv-img"))
+    closeAssist()
+    render()
     return JSON.stringify(out)
   }
   const script = `(async () => { try { return await (${assertFn.toString()})() } catch (e) { return JSON.stringify([["脚本异常", false, e && e.stack ? String(e.stack).split("\\n").slice(0, 4).join(" | ") : String(e)]]) } })()`

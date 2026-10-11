@@ -5980,6 +5980,8 @@ function switchToPreviewTab() {
   document.querySelector('#assistTabs .atab[data-tab="preview"]').click()
 }
 async function openPreview(absPath, name, fromTab = false) {
+  // T149：右侧栏没收起时自动打开——点文件/生成图片要看预览，不该藏在关着的抽屉里
+  if (!$("assistDrawer").classList.contains("open")) openAssist()
   pvCurrent = absPath
   if (!fromTab) {
     // 新打开：已有同路径 Tab 就激活，否则追加
