@@ -207,7 +207,7 @@
   /* T42：中部画布顶部也从顶栏色渐变进画布底色，并把 T40 加的那条 border-top 撤掉 ——
      现在三条缝（左栏/中部/右栏）统一为「无硬线 + 顶色渐变」。渐变高度 8px 正好等于
      #messages 的上外边距，也就是严丝合缝地铺满顶栏与白色卡片之间的那条缝，不留色带 */
-  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; background: linear-gradient(to bottom, var(--panel) 0, var(--bg) 8px); }
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; background: var(--panel); } /* T152：纯白（原渐变到 --bg 灰，让消息区外的横条周围露灰底）*/
   #status { color: var(--warn); font-size: 13px; min-width: 60px; }
   #ctxPct { color: var(--dim); font-size: 12px; }
   #cwdLabel { color: var(--dim); font-size: 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
