@@ -715,6 +715,8 @@
   /* T68：输入框改纯白（panel）——用户明确要「就是要纯白」；靠描边+圆角与白色画布区分，focus 亮 accent 描边 */
   #composer { max-width: 940px; margin: 0 auto; background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 12px 14px 10px; transition: border-color .15s; }
   #composer:focus-within { border-color: var(--accent); }
+  /* T150 拖放：外部文件拖入窗口时输入区高亮提示 */
+  #composer.drag { border-color: var(--accent); border-style: dashed; background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
   /* T23 排队提示/排队列表悬浮在输出区（panel2）上：与 messages/inputArea 同底色，不再独立卡片底 */
   #queueInfo { max-width: 940px; margin: 0 auto; padding: 0 4px; font-size: 12px; color: var(--dim); display: none; }
   #queueInfo.show { display: block; margin-bottom: 4px; }
@@ -4481,6 +4483,42 @@ $("fileInput").onchange = () => {
   $("fileInput").value = ""
   if (f) fileToChip(f)
 }
+// T150 拖放：外部文件拖进窗口任意位置 → 图片进输入框附件气泡（同粘贴），
+// 其它文件插入本地绝对路径文本（agent 用读取工具取内容）。拦截浏览器默认的「打开文件」。
+let dragDepth = 0
+window.addEventListener("dragenter", (e) => {
+  if (!(e.dataTransfer?.types ?? []).includes("Files")) return
+  e.preventDefault()
+  dragDepth++
+  $("composer").classList.add("drag")
+})
+window.addEventListener("dragover", (e) => { e.preventDefault() })
+window.addEventListener("dragleave", (e) => {
+  if (dragDepth > 0) dragDepth--
+  if (dragDepth === 0) $("composer").classList.remove("drag")
+})
+window.addEventListener("drop", (e) => {
+  e.preventDefault()
+  dragDepth = 0
+  $("composer").classList.remove("drag")
+  const files = [...(e.dataTransfer?.files ?? [])]
+  if (!files.length) return
+  const inputEl = $("input")
+  const texts = []
+  for (const f of files) {
+    if (f.type.startsWith("image/")) { fileToChip(f); continue }
+    // 非图片：解析本地绝对路径（Electron webUtils；合成文件/浏览器环境拿不到就退回文件名）
+    const p = window.yyagentApi?.pathForFile?.(f) || ""
+    texts.push(p || f.name)
+  }
+  if (texts.length) {
+    inputEl.focus()
+    const sep = String.fromCharCode(10)
+    document.execCommand("insertText", false, (inputEl.textContent.trim() ? sep : "") + texts.join(sep))
+    autoGrow()
+    $("status").textContent = `已添加 ${texts.length} 个文件路径（agent 将直接读取该文件）`
+  }
+})
 
 // T43 消息区事件委托：思维导图「保存为图片」+ 表格「保存为 xlsx」。
 // 必须用委托 —— #messages 的 innerHTML 每次 render() 都整体重写，直接给按钮挂 onclick 一刷新就丢。

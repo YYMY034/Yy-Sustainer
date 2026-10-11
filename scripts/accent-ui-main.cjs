@@ -233,6 +233,17 @@ app.whenReady().then(async () => {
     }
     messages.pop()
     render()
+    // 15 T150：拖放——模拟 drop 图片 → 附件气泡；模拟 drop 其它文件 → 文件名文本
+    const dt = new DataTransfer()
+    dt.items.add(new File(["fakepngbytes"], "shot.png", { type: "image/png" }))
+    dt.items.add(new File(["textdata"], "notes.txt", { type: "text/plain" }))
+    const dropEv = new DragEvent("drop", { bubbles: true, cancelable: true })
+    Object.defineProperty(dropEv, "dataTransfer", { value: dt })
+    window.dispatchEvent(dropEv)
+    await new Promise((r) => setTimeout(r, 700)) // FileReader 异步读 dataUrl
+    push("拖放图片 → 附件气泡", !!$("#input .imgchip"))
+    push("拖放文件 → 输入框文件名", $("#input").textContent.includes("notes.txt"), $("#input").textContent.slice(0, 40))
+    $("#input").innerHTML = ""
     return JSON.stringify(out)
   }
   const script = `(async () => { try { return await (${assertFn.toString()})() } catch (e) { return JSON.stringify([["脚本异常", false, e && e.stack ? String(e.stack).split("\\n").slice(0, 4).join(" | ") : String(e)]]) } })()`
