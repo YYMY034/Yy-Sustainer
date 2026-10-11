@@ -940,7 +940,7 @@
   .ch-seg { margin-left: auto; display: inline-flex; background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
   .ch-seg button { background: transparent; border: none; color: var(--dim); font: inherit; font-size: 11.5px; padding: 4px 11px; cursor: pointer; }
   .ch-seg button.active { background: var(--text); color: var(--bg); }
-  .hm-scroll { overflow-x: auto; padding-bottom: 2px; }
+  .hm-scroll { overflow-x: auto; padding-bottom: 2px; display: flex; justify-content: center; } /* T152：SVG 热力图居中，不挤在左角 */
   .hm-scroll svg { display: block; }
   #chTip { position: fixed; z-index: 90; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 11.5px; color: var(--text); box-shadow: 0 8px 24px var(--shadow); pointer-events: none; display: none; white-space: nowrap; line-height: 1.6; }
   #chTip .t { font-weight: 600; }
@@ -3489,7 +3489,8 @@ const hmParse = (k) => { const [y, m, dd] = k.split("-").map(Number); return new
 function hmWeekStart(d) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - (x.getDay() + 6) % 7); return x }
 function hmCnDate(k) { const d = hmParse(k); return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日` }
 // 分档：v 越过几条阈值就点亮几档（0=无用量用底色，1..4 对应 scale 4 档）
-function hmLevel(v, th) { let lv = 0; for (const t of th) { if (v > t) lv++; else break } return lv }
+function hmLevel(v, th) { if (!(v > 0)) return 0 // T152：0 值恒不亮（>= 语义下防 th 全 0 误亮）
+  let lv = 0; for (const t of th) { if (v >= t) lv++; else break } return lv } // T152：>= 修复单天/最大值日永远不亮的 off-by-one
 
 function usageHeatmap(daily) {
   const byDate = daily?.byDate ?? {}
