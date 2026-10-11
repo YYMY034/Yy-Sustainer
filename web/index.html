@@ -3564,9 +3564,11 @@ function usageDonut(mu) {
 }
 
 let usageErr = ""
+let usageRequested = false // T148：loadUsage 已发起过（区分「过早重绘」与「真实加载中」）
 async function loadUsage() {
   if (!$("usageCharts")) return
-  const grab = (u) => fetch(u).then((r) => {
+  usageRequested = true
+  const grab = (u) => fetch(u, { signal: AbortSignal.timeout(8000) }).then((r) => {
     if (!r.ok) throw new Error(`HTTP ${r.status}${r.status === 404 ? " —— 当前网关是旧版本，请重启" : ""}`)
     return r.json()
   }).catch((e) => { throw new Error(`${u}: ${e.message}`) })
@@ -3584,7 +3586,13 @@ function renderUsageCharts() {
   const el = $("usageCharts")
   if (!el) return
   if (!usageCache?.daily?.byDate || !usageCache?.models) {
-    el.innerHTML = `<div class="ch-empty">用量明细暂不可用${usageErr ? ` —— ${usageErr}` : "，正在加载…"}</div>`
+    // T148：usageCache 空有两种情形——启动时 applyAccent 触发的过早重绘（此时不该写占位文案，
+    // 打开设置页的 loadUsage 会立刻真实加载）和真实加载失败（usageErr 有原因）。
+    el.innerHTML = usageErr
+      ? `<div class="ch-empty">用量明细暂不可用 —— ${esc(usageErr)}<br><button id="usageRetry" style="margin-top:8px;font:inherit;font-size:12px;padding:4px 12px;border-radius:8px;cursor:pointer;">重试</button></div>`
+      : usageRequested ? `<div class="ch-empty">正在加载用量明细…</div>` : `<div class="ch-empty" style="opacity:.5;">打开设置页时自动加载用量明细</div>`
+    const retry = document.getElementById("usageRetry")
+    if (retry) retry.onclick = () => loadUsage()
     return
   }
   // T86：两张用量图合并为一张 3D 翻转卡——正面 Token 活动热力图，背面每日模型累计用量环形图，
