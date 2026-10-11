@@ -1118,7 +1118,6 @@
     <!-- 回到底部按钮：必须是 messages 的兄弟节点——放在容器内会被 render() 的 innerHTML 重写冲掉 -->
     <!-- T41：图标换手绘 SVG（向下箭头 + 底横线），不再是文本 ↓ -->
     <button id="jumpBottom" title="回到底部"><svg width="18" height="18" viewBox="0 0 16 16" fill="none"><path d="M8 3.3v7.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M4.6 7.7L8 11.1l3.4-3.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.8 13.4h8.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
-    </div>
     <!-- T136 提问卡片移入消息流尾部渲染（render() 里 qcardHtml()），独立元素已删 -->
     <div id="banner"></div>
     <!-- T93 P2 断点恢复：上次进程被中断、本会话还有未完成回合时显示，三个动作对应后端 resume -->
@@ -1133,6 +1132,7 @@
       </div>
       <div id="todoProg"><div id="todoFill"></div></div>
       <div id="todoItems"></div>
+    </div>
       <div id="queueInfo"></div>
       <div id="queueList"></div>
       <div id="composer">
