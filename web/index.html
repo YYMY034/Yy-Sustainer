@@ -861,7 +861,7 @@
   #banner { font-size: 12px; color: var(--err); padding: 0 22px 6px; display: none; }
   /* T93 P2 断点恢复横幅：上次进程被中断、还有未完成回合时出现 */
   #cpBar { display: none; width: 100%; max-width: 892px; margin: 0 auto 10px; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12px; color: var(--text);
-           background: color-mix(in srgb, var(--accent) 8%, var(--panel)); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 2px 10px var(--shadow); }
+           background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 2px 10px var(--shadow); } /* T152：纯白底与消息区一致（accent 混色仍显灰）*/
   #cpBar.show { display: flex; }
   #cpBar .cpText { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #cpBar button { background: transparent; border: 1px solid var(--border); border-radius: 7px; color: var(--dim);
