@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { normalize } from "node:path"
 import { homedir } from "node:os"
@@ -68,6 +68,23 @@ const INDEX_LOCK = join(ROOT, "index.json.lock")
 function ensure(): void {
   mkdirSync(ROOT, { recursive: true })
   sweepStaleTemp()
+}
+
+/** T142 外部删除审计：sessions 目录里 .json 消失（rename 事件且文件已不在）即打日志留证据。
+ *  守卫自愈负责恢复数据，这里负责留下"谁在什么时候动了会话目录"的痕迹。 */
+let watched = false
+/** T142 外部删除审计启动——由网关启动时显式调用（进程常驻才有意义；测试进程不调） */
+export function startSessionWatch(): void {
+  if (watched) return
+  watched = true
+  try {
+    watch(ROOT, (ev, f) => {
+      if (!f || !f.endsWith(".json") || f === "index.json") return
+      if (ev === "rename" && !existsSync(join(ROOT, f))) {
+        console.warn(`[会话] 检测到外部删除: ${f}（${new Date().toLocaleString()}）——守卫副本可恢复`)
+      }
+    }).unref() // 不阻塞进程退出（测试/短生命周期进程）
+  } catch { /* watch 失败不影响存储 */ }
 }
 
 /** 进程内只扫一次：清理上次崩溃留下的 .tmp（60 秒内刚写的可能正被别的进程用，不动） */
@@ -203,6 +220,31 @@ export function listSessions(): SessionMeta[] {
       writeIndex(list)
       console.log(`[会话] 对账自愈：补回 ${orphans.length} 个被从 index 丢掉的会话（${orphans.map((o) => o.id).join(",")}）`)
     }
+    // T142 守卫副本自愈：外部进程可能直接删主文件（绕过 API，连 trash 都不进）——
+    // guard 里有而主目录没有的会话 = 被外部删掉的用户数据，从 guard 恢复。
+    // tombstone 期内不恢复（用户刚删除的）。
+    const guardDir = join(dirname(ROOT), "sessions-guard")
+    if (existsSync(guardDir)) {
+      const restored: string[] = []
+      for (const f of readdirSync(guardDir)) {
+        if (!f.endsWith(".json")) continue
+        const id = f.slice(0, -5)
+        if (existsSync(join(ROOT, f)) || known.has(id)) continue
+        const t = tombstones.get(id)
+        if (t != null && Date.now() - t < 30 * 60000) continue
+        try {
+          const j = JSON.parse(readFileSync(join(guardDir, f), "utf8")) as SessionFile
+          if (!j?.meta?.id || !Array.isArray(j.messages)) continue
+          copyFileSync(join(guardDir, f), join(ROOT, f))
+          if (!list.some((s) => s.id === id)) list = [j.meta, ...list]
+          restored.push(id)
+        } catch { /* guard 坏文件跳过 */ }
+      }
+      if (restored.length) {
+        writeIndex(list)
+        console.warn(`[会话] 守卫自愈：检测到 ${restored.length} 个会话被外部删除，已从守卫副本恢复（${restored.join(",")}）`)
+      }
+    }
   } catch { /* 目录扫描失败不影响列表返回 */ }
   return list.map((s) => (s.cwd ? { ...s, cwd: normalize(s.cwd) } : s))
 }
@@ -228,6 +270,13 @@ export function persist(meta: SessionMeta, messages: StoredMessage[]): void {
   ensure()
   // T91：原子写，避免并发/中断写出半个文件（index 同理）
   writeAtomic(join(ROOT, `${meta.id}.json`), { meta, messages })
+  // T142 守卫副本：用户会话最高保存优先级——主文件落地的同时同步一份到
+  // sessions-guard/（外部进程绕过 API 直接删主文件时由此恢复，见 listSessions 守卫自愈）
+  try {
+    const guardDir = join(dirname(ROOT), "sessions-guard")
+    mkdirSync(guardDir, { recursive: true })
+    copyFileSync(join(ROOT, `${meta.id}.json`), join(guardDir, `${meta.id}.json`))
+  } catch { /* 守卫失败不阻塞主写入 */ }
   // T92：列表更新走跨进程锁——两个窗口同时发消息时，后写的不会再抹掉先写的
   mutateIndex((list) => {
     const i = list.findIndex((x) => x.id === meta.id)
@@ -248,7 +297,7 @@ export function persist(meta: SessionMeta, messages: StoredMessage[]): void {
 }
 
 /** T140：最近删除的会话 id → 删除时刻。persist 见到新鲜的 tombstone 就不 unshift（防复活） */
-const tombstones = new Map<string, number>()
+export const tombstones = new Map<string, number>()
 
 export function deleteSession(id: string): void {
   tombstones.set(id, Date.now())
@@ -258,6 +307,8 @@ export function deleteSession(id: string): void {
   // 异常路径删掉就彻底找不回（备份 zip 7 天滚动，粒度不够）。
   const f = join(ROOT, `${id}.json`)
   try {
+    // T142：用户真删的，守卫副本同步移除（回收站仍留档 7 天）
+    try { unlinkSync(join(dirname(ROOT), "sessions-guard", `${id}.json`)) } catch { /* 可能不存在 */ }
     const trashDir = join(dirname(ROOT), "sessions-trash")
     mkdirSync(trashDir, { recursive: true })
     if (existsSync(f)) renameSync(f, join(trashDir, `${id}-${Date.now()}.json`))

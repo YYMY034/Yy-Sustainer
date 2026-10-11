@@ -63,6 +63,7 @@ import {
   loadSession,
   persist,
   deleteSession,
+  startSessionWatch,
   toCoreMessages,
   stripThinkingForModel,
   truncateFrom,
@@ -2895,6 +2896,7 @@ export function startGateway(port = PORT): void {
     }
   }, 300)
 
+  startSessionWatch() // T142：外部删除审计（谁动了会话目录，日志留证据）
   // T92：默认只听本机；要局域网分享成果链接就把 config.lanShare 设成 true（或 YYAGENT_HOST=0.0.0.0）
   // T138：listen 失败必须明确退出——否则端口被占（已开着一个网关又手动起一个）时 EADDRINUSE
   // 会被下面的全局 uncaughtException 兜底吞掉，进程活着但无端口，scheduler 却照常跑

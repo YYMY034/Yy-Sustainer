@@ -5,10 +5,11 @@
  * 这正是 T92 加锁要解决的问题——加锁前 index 的「读-改-写」会互相覆盖，
  * 15 次并发创建通常只剩下 8~12 条，而且丢哪几条完全随机、事后无从追查。
  */
+import "./helpers/fake-home.js"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import {
@@ -21,14 +22,18 @@ import {
   repairIndex,
   toCoreMessages,
   truncateFrom,
+  tombstones,
 } from "../src/session/store.js"
 
 const SESSIONS = join(homedir(), ".yyagent", "sessions")
 const INDEX = join(SESSIONS, "index.json")
+const GUARD = join(homedir(), ".yyagent", "sessions-guard")
 
 /** 每个用例从干净状态开始（沙箱 HOME 由跑批器提供，这里只清会话目录） */
 function reset(): void {
   rmSync(SESSIONS, { recursive: true, force: true })
+  rmSync(GUARD, { recursive: true, force: true }) // T142：守卫目录同步清，否则守卫自愈会把上个测试的会话救回来
+  tombstones.clear() // 同理：跨测试的 tombstone 会让删除语义串场
 }
 
 function runWorker(n: number, tag: string): Promise<void> {
@@ -180,8 +185,9 @@ test("repairIndex：剔除 index 里有、磁盘上没有的条目", () => {
   reset()
   const a = createSession("C:\\p", undefined, "A")
   const b = createSession("C:\\p", undefined, "B")
-  // 模拟「会话文件被外部删掉」——index 里还留着，点进去就是 404
+  // 模拟「会话文件被外部彻底删掉」（主文件 + 守卫副本）——index 里还留着，点进去就是 404
   rmSync(join(SESSIONS, `${b.id}.json`), { force: true })
+  rmSync(join(GUARD, `${b.id}.json`), { force: true })
   const r = repairIndex()
   assert.equal(r.dropped, 1)
   assert.equal(r.changed, true)
@@ -271,4 +277,37 @@ test("跨进程并发建会话一条都不丢（T92 锁的核心用例）", asyn
     [],
     "并发写不该留下临时文件",
   )
+})
+
+test("T142 守卫副本：外部进程绕过 API 直接删主文件 → listSessions 自动从守卫恢复", () => {
+  reset()
+  const meta = createSession("C:\proj")
+  persist(meta, [{ role: "user", content: "用户真实对话", ts: Date.now() }])
+  assert.ok(existsSync(join(GUARD, `${meta.id}.json`)), "persist 必须同步落守卫副本")
+  // 模拟外部进程：不经 deleteSession，直接删主文件 + 清 index
+  unlinkSync(join(SESSIONS, `${meta.id}.json`))
+  writeFileSync(INDEX, "[]")
+  // 用户侧视角：读列表 → 守卫自愈把会话恢复回来
+  const list = listSessions()
+  assert.equal(list.length, 1, "被外部删除的会话必须被守卫自愈恢复")
+  assert.equal(list[0].id, meta.id)
+  assert.ok(existsSync(join(SESSIONS, `${meta.id}.json`)), "主文件应从守卫副本恢复")
+  const loaded = loadSession(meta.id)
+  assert.equal(loaded?.messages.length, 1, "恢复的会话内容完整")
+})
+
+test("T142 守卫副本：用户真删的（tombstone 期内）不从守卫恢复", () => {
+  reset()
+  const meta = createSession("C:\proj")
+  persist(meta, [{ role: "user", content: "x", ts: Date.now() }])
+  deleteSession(meta.id) // 用户删除：主文件进回收站 + 守卫副本同步删
+  assert.ok(!existsSync(join(GUARD, `${meta.id}.json`)), "真删的守卫副本应同步移除")
+  const list = listSessions()
+  assert.equal(list.filter((s) => s.id === meta.id).length, 0, "用户删的不能被守卫复活")
+})
+
+test("T142 守卫副本：createSession 的空会话也落守卫", () => {
+  reset()
+  const meta = createSession("C:\proj")
+  assert.ok(existsSync(join(GUARD, `${meta.id}.json`)), "createSession 走 persist，也应有守卫副本")
 })
