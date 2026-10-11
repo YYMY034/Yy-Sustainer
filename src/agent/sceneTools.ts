@@ -280,7 +280,9 @@ export async function localComfyImage(prompt: string, size: string, outPath: str
 export const imggenTool = tool({
   description:
     "AI 生成图片：按文字描述生成一张图片，保存为当前工作区下的 PNG 并返回路径。本地 ComfyUI（Qwen-Image-2.1-Turbo）开启时优先本地、零 token；否则走云端图像通道。" +
-    "提示词写法建议：主体描述清晰具体（种类/外观/动作/环境/风格）；单主体效果最稳，多主体请明确数量与位置关系（如「两只骆驼并排行走」），模糊的复数表达容易产生肢体融合畸形。",
+    "提示词写法建议：主体描述清晰具体（种类/外观/动作/环境/风格）；单主体效果最稳，多主体请明确数量与位置关系（如「两只骆驼并排行走」），模糊的复数表达容易产生肢体融合畸形。" +
+    "纪律：**每次生图请求都必须实际调用本工具重新生成**——即使会话历史里有相似图片，也绝不复用旧文件路径、不编造路径、不声称「文件已存在/已核实」（旧图可能是别的需求生成的或已被删除，" +
+    "自行用 dir/read 检查不算核实）；只有本工具返回结果里的路径才是真实可用的产物。",
   inputSchema: z.object({
     prompt: z.string().describe("图片描述（越具体越好：主体、风格、构图、色调）"),
     filename: z.string().optional().describe("输出文件名（默认 generated-<时间戳>.png）"),

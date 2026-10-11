@@ -6002,6 +6002,8 @@ async function openPreview(absPath, name, fromTab = false) {
       const img = document.createElement("img")
       img.className = "pv-img"
       img.src = url
+      // T150：图片加载失败给出明确原因（旧产物被删/路径失效时不再静默显示破图）
+      img.onerror = () => { body.innerHTML = `<div class="pv-empty">图片加载失败 —— 文件可能不存在或已被删除。<br><span style="font-size:11px">${esc(absPath)}</span></div>` }
       body.appendChild(img)
     } else if (/^html?$/.test(ext)) {
       // HTML 用 iframe 沙箱渲染（srcdoc 需先取文本；直接 src 指向网关只读接口更简单）
