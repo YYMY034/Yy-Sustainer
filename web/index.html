@@ -389,7 +389,7 @@
   /* P2-4 进度可见：todo 任务清单条（消息区下方，有任务就显示）——T86 卡片化：
      柔投影 + 展开内容 todoUnfold 动画 + 有任务常驻（全部完成后 10s 才收拢为摘要条） */
   /* T151 横条卡片化：todo/断点横条白底（--panel）+ 对齐消息列宽，融入主对话背景（原 panel2 灰底突兀） */
-  #todoBar { display: none; max-width: 892px; margin: 0 auto 10px; padding: 10px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 2px 10px var(--shadow); }
+  #todoBar { display: none; width: 100%; max-width: 892px; margin: 0 auto 10px; padding: 10px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 2px 10px var(--shadow); }
   #todoBar.show { display: block; }
   #todoBar.expanded #todoItems { display: block; animation: todoUnfold .18s cubic-bezier(.22,.61,.36,1); }
   @keyframes todoUnfold { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
@@ -860,7 +860,7 @@
   #olderBtn:hover { color: var(--accent); border-color: var(--accent); }
   #banner { font-size: 12px; color: var(--err); padding: 0 22px 6px; display: none; }
   /* T93 P2 断点恢复横幅：上次进程被中断、还有未完成回合时出现 */
-  #cpBar { display: none; max-width: 892px; margin: 0 auto 10px; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12px; color: var(--text);
+  #cpBar { display: none; width: 100%; max-width: 892px; margin: 0 auto 10px; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12px; color: var(--text);
            background: color-mix(in srgb, var(--accent) 8%, var(--panel)); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 2px 10px var(--shadow); }
   #cpBar.show { display: flex; }
   #cpBar .cpText { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
