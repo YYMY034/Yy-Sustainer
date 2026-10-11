@@ -21,6 +21,7 @@
  */
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { guardTestHome } from "../shared/testHomeGuard.js"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { listSessions, loadSession, persist, type StoredMessage } from "./store.js"
@@ -139,6 +140,7 @@ export function referencedPaths(messages: StoredMessage[]): Set<string> {
  * 返回删除的文件数。只在 used 非空时执行——避免「调用方传了空集合」把整个目录清空。
  */
 export function pruneAttachments(sessionId: string, used: Set<string>): number {
+  guardTestHome("attachments.pruneAttachments") // T142
   const dir = join(ROOT, sessionId)
   if (!existsSync(dir)) return 0
   let n = 0
@@ -161,6 +163,7 @@ export function pruneAttachments(sessionId: string, used: Set<string>): number {
 
 /** 会话删除时整体清掉（幂等） */
 export function removeSessionAttachments(sessionId: string): void {
+  guardTestHome("attachments.removeSessionAttachments") // T142
   try {
     rmSync(join(ROOT, sessionId), { recursive: true, force: true })
   } catch {
@@ -173,6 +176,7 @@ export function removeSessionAttachments(sessionId: string): void {
  * 返回清掉的目录数。跳过点开头的文件（.migrated 标记等）。
  */
 export function sweepOrphanAttachments(aliveSessionIds: Set<string>): number {
+  guardTestHome("attachments.sweepOrphanAttachments") // T142
   if (!existsSync(ROOT)) return 0
   let n = 0
   try {
@@ -245,6 +249,7 @@ export function migrateInlineImages(): MigrateResult {
  * 后者一旦误判就是把用户还在用的图删了。宁可留几个垃圾文件，也不能删错。
  */
 export function sweepUnreferencedAttachments(): { files: number } {
+  guardTestHome("attachments.sweepUnreferencedAttachments") // T142
   if (!existsSync(ROOT)) return { files: 0 }
   let files = 0
   try {

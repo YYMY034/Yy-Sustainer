@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { guardTestHome } from "../shared/testHomeGuard.js"
 import { homedir } from "node:os"
 import { dirname, join, resolve, sep } from "node:path"
 import { loadConfig } from "./config.js"
@@ -266,6 +267,7 @@ export function enforceBudget(over?: Partial<UndoCfg>): void {
 
 /** 删一轮快照（目录整个删——index 与 .snap 是一体的） */
 export function removeUndoTurn(sessionId: string, ts: number): void {
+  guardTestHome("undoStore.removeUndoTurn") // T142
   try {
     rmSync(turnDir(sessionId, ts), { recursive: true, force: true })
   } catch { /* 删不掉下轮还会被 enforceBudget 看到 */ }
@@ -274,6 +276,7 @@ export function removeUndoTurn(sessionId: string, ts: number): void {
 /** 启动时扫一次：过期/超预算的清掉。返回**清掉的轮次数**（不是目录数——
  *  同一会话删掉一轮不会让会话目录消失，数目录会恒返回 0）。 */
 export function sweepUndoSnapshots(over?: Partial<UndoCfg>): number {
+  guardTestHome("undoStore.sweepUndoSnapshots") // T142
   const before = countTurns()
   enforceBudget(over)
   return Math.max(0, before - countTurns())

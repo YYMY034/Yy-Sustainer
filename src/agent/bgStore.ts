@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
+import { guardTestHome } from "../shared/testHomeGuard.js"
 import { join } from "node:path"
 import { homedir } from "node:os"
 
@@ -129,6 +130,7 @@ export function nextBgId(): string {
  * 记录比日志活得更久只会让人点开一个空文件。
  */
 export function sweepBgRecords(): number {
+  guardTestHome("bgStore.sweepBgRecords") // T142
   try {
     const all = loadBgTasks()
     const keep = all.filter((r) => existsSync(r.logFile))

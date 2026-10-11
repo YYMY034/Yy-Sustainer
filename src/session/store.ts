@@ -5,6 +5,7 @@ import { homedir } from "node:os"
 import { randomUUID } from "node:crypto"
 import type { CoreMessage } from "ai"
 import { sleepSync, withFileLock } from "../util/lock.js"
+import { guardTestHome } from "../shared/testHomeGuard.js"
 
 export interface SessionMeta {
   id: string
@@ -300,6 +301,8 @@ export function persist(meta: SessionMeta, messages: StoredMessage[]): void {
 export const tombstones = new Map<string, number>()
 
 export function deleteSession(id: string): void {
+  // T142：测试进程若跑在真实 HOME 上，这一步会清掉用户的会话 + 守卫副本。拦在动手之前。
+  guardTestHome("store.deleteSession")
   tombstones.set(id, Date.now())
   mutateIndex((list) => list.filter((x) => x.id !== id))
   // T140：删除改「移入回收站」——~/.yyagent/sessions-trash/ 保留 7 天，误删/异常可找回。
@@ -328,6 +331,7 @@ export function deleteSession(id: string): void {
  */
 export function archiveStaleSessions(days: number): { archived: number; ids: string[] } {
   if (!(days > 0)) return { archived: 0, ids: [] }
+  guardTestHome("store.archiveStaleSessions") // T142：会移动用户的会话文件，同样要拦
   const cutoff = Date.now() - days * 86_400_000
   const ids: string[] = []
   mutateIndex((list) => {

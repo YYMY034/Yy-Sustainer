@@ -6,6 +6,7 @@
  * 而 `bg-1.log` 还在 7 天保留期内 → 模型读到的是**错配的日志**。
  * 所以 `nextBgId()` 必须从磁盘已有的最大序号起步，这条有专门的回归断言。
  */
+import "./helpers/isolated-home.js" // T142：必须在 src 之前——否则测试会直接操作真实 ~/.yyagent
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs"

@@ -10,6 +10,7 @@
  * - 半截文件：checkpoint 是「进程被杀」场景下唯一的线索，不能自己先烂掉
  * - 恢复语义：没有正文产出时也要给一条能落库的消息，否则 adopt 会写出空消息
  */
+import "./helpers/isolated-home.js" // T142：必须在 src 之前——否则测试会直接操作真实 ~/.yyagent
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs"

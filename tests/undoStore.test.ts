@@ -8,6 +8,7 @@
  *  ④ **恢复逻辑只有一处出口**：内存与磁盘两条来源都收敛到 `resolveUndoTurn`，
  *     且磁盘侧复用的是内存侧同一个 `planUndo()`——不另写一套
  */
+import "./helpers/isolated-home.js" // T142：必须在 src 之前——否则测试会直接操作真实 ~/.yyagent
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"

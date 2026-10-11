@@ -11,6 +11,7 @@
  *   ② 没清单就返回空串——不能注入一段「【当前任务计划】（0/0）」占地方
  *   ③ 脏数据不能让它抛（读文件/解析都可能失败，注入失败不该拖垮一轮）
  */
+import "./helpers/isolated-home.js" // T142：必须在 src 之前——否则测试会直接操作真实 ~/.yyagent
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"

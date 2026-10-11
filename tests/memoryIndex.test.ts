@@ -1,3 +1,4 @@
+import "./helpers/isolated-home.js" // T142：必须在 src 之前——否则测试会直接操作真实 ~/.yyagent
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs"
@@ -5,7 +6,8 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { memoryIndexSummary } from "../src/agent/memory.js"
 
-// worker 已隔离 HOME——直接操作沙箱里的 memory 目录（一个测试文件一个沙箱）
+// HOME 已由上面的 isolated-home 重定向到沙箱——这里操作的是沙箱里的 memory 目录。
+// （原先注释写「worker 已隔离」，那是错的：只有 npm test 走跑批器时才隔离，直接跑本文件会碰真实目录。）
 const MEM = join(homedir(), ".yyagent", "memory")
 
 test("memoryIndexSummary：两层索引都进摘要（T123）", () => {

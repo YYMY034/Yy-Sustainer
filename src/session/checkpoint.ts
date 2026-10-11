@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
+import { guardTestHome } from "../shared/testHomeGuard.js"
 import { join } from "node:path"
 import { homedir } from "node:os"
 
@@ -147,6 +148,7 @@ export function loadCheckpoint(sessionId: string): TurnCheckpoint | undefined {
 
 /** 删掉一个 checkpoint（回合正常结束 / 用户已做出选择）。会话不存在也算清干净，幂等 */
 export function clearCheckpoint(sessionId: string): void {
+  guardTestHome("checkpoint.clearCheckpoint") // T142
   const file = checkpointPath(sessionId)
   if (!file) return
   try {

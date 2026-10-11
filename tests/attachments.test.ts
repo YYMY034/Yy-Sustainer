@@ -4,6 +4,7 @@
  * 核心不变量：**往返无损**——外置后还能还原出逐字节相同的 base64；
  * 以及**同图只存一份**（内容寻址的意义）。
  */
+import "./helpers/isolated-home.js" // T142：必须在 src 之前——否则测试会直接操作真实 ~/.yyagent
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"

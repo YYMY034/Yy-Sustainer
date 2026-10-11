@@ -5,7 +5,7 @@
  * 这正是 T92 加锁要解决的问题——加锁前 index 的「读-改-写」会互相覆盖，
  * 15 次并发创建通常只剩下 8~12 条，而且丢哪几条完全随机、事后无从追查。
  */
-import "./helpers/fake-home.js"
+import { assertIsolatedHome } from "./helpers/isolated-home.js" // T142：必须在 src 之前 + 破坏性操作前自检
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
@@ -29,8 +29,16 @@ const SESSIONS = join(homedir(), ".yyagent", "sessions")
 const INDEX = join(SESSIONS, "index.json")
 const GUARD = join(homedir(), ".yyagent", "sessions-guard")
 
-/** 每个用例从干净状态开始（沙箱 HOME 由跑批器提供，这里只清会话目录） */
+/**
+ * 每个用例从干净状态开始。
+ *
+ * T142 加固：这是整个仓库里最危险的一次 `rmSync`——`recursive + force` 硬删，不进回收站。
+ * 原先它无条件执行，隔离完全依赖「跑批器有没有设 HOME 环境变量」；一旦有人直接
+ * `npx tsx --test tests/store.test.ts`（外部测试循环最自然的动作），它删的就是**用户真实的会话目录**。
+ * 现在删之前先自检：HOME 不在临时目录就抛错，测试红掉总比用户数据没了强。
+ */
 function reset(): void {
+  assertIsolatedHome() // ← 硬删前的最后一道闸
   rmSync(SESSIONS, { recursive: true, force: true })
   rmSync(GUARD, { recursive: true, force: true }) // T142：守卫目录同步清，否则守卫自愈会把上个测试的会话救回来
   tombstones.clear() // 同理：跨测试的 tombstone 会让删除语义串场
