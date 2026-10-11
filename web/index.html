@@ -388,8 +388,10 @@
   .model-divider .ico:hover .tip { display: block; }
   /* P2-4 进度可见：todo 任务清单条（消息区下方，有任务就显示）——T86 卡片化：
      柔投影 + 展开内容 todoUnfold 动画 + 有任务常驻（全部完成后 10s 才收拢为摘要条） */
-  /* T151 横条卡片化：todo/断点横条白底（--panel）+ 对齐消息列宽，融入主对话背景（原 panel2 灰底突兀） */
-  #todoBar { display: none; width: 100%; max-width: 892px; margin: 0 auto 10px; padding: 10px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 2px 10px var(--shadow); }
+  /* T151/T154 todoBar 浮层化：锚在输入区上方（absolute），展开不挤压/遮挡消息区的文档流——
+     白底卡片 + 强阴影（浮层语义）+ 展开内容 max-height 内部滚动 */
+  #inputArea { position: relative; }
+  #todoBar { display: none; position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; max-width: 892px; margin: 0 auto; padding: 10px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 32px var(--shadow); z-index: 40; }
   #todoBar.show { display: block; }
   #todoBar.expanded #todoItems { display: block; animation: todoUnfold .18s cubic-bezier(.22,.61,.36,1); }
   @keyframes todoUnfold { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
@@ -400,7 +402,7 @@
   #todoToggle { margin-left: auto; background: none; border: none; color: var(--dim); cursor: pointer; font-size: 12px; transition: transform .15s; }
   #todoProg { height: 4px; background: var(--border); border-radius: 2px; margin-top: 6px; overflow: hidden; }
   #todoFill { height: 100%; width: 0; background: var(--user); border-radius: 2px; transition: width .3s; }
-  #todoItems { display: none; margin-top: 8px; }
+  #todoItems { display: none; margin-top: 8px; max-height: 300px; overflow-y: auto; } /* 展开过长时内部滚动，浮层不无限高 */
   #todoItems .ti { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; padding: 3px 0; color: var(--dim); }
   #todoItems .ti .ico { width: 16px; text-align: center; flex-shrink: 0; }
   #todoItems .ti.done { color: var(--dim); text-decoration: line-through; opacity: .7; }
@@ -1116,7 +1118,13 @@
     <!-- 回到底部按钮：必须是 messages 的兄弟节点——放在容器内会被 render() 的 innerHTML 重写冲掉 -->
     <!-- T41：图标换手绘 SVG（向下箭头 + 底横线），不再是文本 ↓ -->
     <button id="jumpBottom" title="回到底部"><svg width="18" height="18" viewBox="0 0 16 16" fill="none"><path d="M8 3.3v7.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M4.6 7.7L8 11.1l3.4-3.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.8 13.4h8.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
-    <!-- P2-4 进度可见：todo 任务清单进度条（state.todo 驱动，≥1 项时显示） -->
+    </div>
+    <!-- T136 提问卡片移入消息流尾部渲染（render() 里 qcardHtml()），独立元素已删 -->
+    <div id="banner"></div>
+    <!-- T93 P2 断点恢复：上次进程被中断、本会话还有未完成回合时显示，三个动作对应后端 resume -->
+    <div id="cpBar"><span class="cpText"></span><button class="primary" data-act="adopt">采纳已产出</button><button data-act="retry">重新发起</button><button data-act="discard">丢弃</button></div>
+    <div id="inputArea">
+      <!-- P2-4 进度可见：todo 任务清单进度条（state.todo 驱动，≥1 项时显示） -->
     <div id="todoBar">
       <div id="todoHead">
         <span id="todoTitle">任务进度</span>
@@ -1125,12 +1133,6 @@
       </div>
       <div id="todoProg"><div id="todoFill"></div></div>
       <div id="todoItems"></div>
-    </div>
-    <!-- T136 提问卡片移入消息流尾部渲染（render() 里 qcardHtml()），独立元素已删 -->
-    <div id="banner"></div>
-    <!-- T93 P2 断点恢复：上次进程被中断、本会话还有未完成回合时显示，三个动作对应后端 resume -->
-    <div id="cpBar"><span class="cpText"></span><button class="primary" data-act="adopt">采纳已产出</button><button data-act="retry">重新发起</button><button data-act="discard">丢弃</button></div>
-    <div id="inputArea">
       <div id="queueInfo"></div>
       <div id="queueList"></div>
       <div id="composer">
@@ -4515,8 +4517,9 @@ window.addEventListener("drop", (e) => {
   }
   if (texts.length) {
     inputEl.focus()
+    // T154：DOM 直插（execCommand 依赖焦点状态，无头/失焦场景会静默失败）
     const sep = String.fromCharCode(10)
-    document.execCommand("insertText", false, (inputEl.textContent.trim() ? sep : "") + texts.join(sep))
+    inputEl.appendChild(document.createTextNode((inputEl.textContent.trim() ? sep : "") + texts.join(sep)))
     autoGrow()
     $("status").textContent = `已添加 ${texts.length} 个文件路径（agent 将直接读取该文件）`
   }

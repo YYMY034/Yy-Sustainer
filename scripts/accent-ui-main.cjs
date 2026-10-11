@@ -244,6 +244,25 @@ app.whenReady().then(async () => {
     push("拖放图片 → 附件气泡", !!$("#input .imgchip"))
     push("拖放文件 → 输入框文件名", $("#input").textContent.includes("notes.txt"), $("#input").textContent.slice(0, 40))
     $("#input").innerHTML = ""
+    // 16.5 T154：todoBar 浮层化——展开不挤压消息区（absolute 锚在输入区上方）
+    messages.push({ ts: 950, role: "user", content: "做个任务" })
+    render()
+    renderTodoBar([
+      { content: "生成骆驼吉祥物 IP 形象，三头身比例", status: "done" },
+      { content: "生成表情包九宫格，九种情绪", status: "in_progress" },
+      { content: "质检清晰度与多头", status: "pending" },
+    ], true)
+    $("#todoHead").click() // 展开
+    await new Promise((r) => setTimeout(r, 300))
+    const barR = $("#todoBar").getBoundingClientRect()
+    const iaR = $("#inputArea").getBoundingClientRect()
+    const msgsR = $("#messages").getBoundingClientRect()
+    push("todoBar 浮层（absolute）", getComputedStyle($("#todoBar")).position === "absolute")
+    push("浮在输入区上沿", Math.abs(barR.bottom - iaR.top) < 20, Math.round(barR.bottom) + " vs " + Math.round(iaR.top))
+    push("宽度对齐消息列（892）", Math.round(barR.width) === 892, Math.round(barR.width))
+    $("#todoHead").click() // 收起还原
+    messages.pop()
+    render()
     // 16 T149：点图片卡片时右侧栏没开 → 自动打开抽屉 + 预览显示
     closeAssist()
     push("前置：抽屉已关闭", !$("#assistDrawer").classList.contains("open"))
